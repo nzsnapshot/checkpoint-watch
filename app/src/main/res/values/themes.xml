@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.CheckpointWatch" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/ic_launcher_background</item>
+    <!--
+      The window the Activity opens in, before Compose has drawn a frame. Its background is the
+      same colour as the Compose `background` role in the matching theme, so launching the app
+      never flashes white (or, in light mode, black) first.
+
+      The bars are transparent here as well as in `enableEdgeToEdge()`, so the very first frame is
+      already edge to edge rather than jumping once Compose takes over.
+    -->
+    <style name="Theme.CheckpointWatch" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 </resources>

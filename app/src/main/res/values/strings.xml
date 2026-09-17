@@ -1,4 +1,120 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">Checkpoint Watch</string>
+
+    <!-- Report types -->
+    <string name="type_checkpoint">Checkpoint</string>
+    <string name="type_police">Police presence</string>
+    <string name="type_crash">Crash</string>
+    <string name="type_camera">Speed camera</string>
+    <string name="type_other">Update</string>
+
+    <!-- Home -->
+    <string name="home_title">Checkpoint Watch</string>
+    <string name="cd_settings">Settings</string>
+    <string name="cd_back">Back</string>
+
+    <string name="summary_window">Last 2 hours</string>
+    <string name="summary_freshest">Freshest report %1$s</string>
+    <string name="summary_quiet">Quiet right now</string>
+    <string name="cd_summary_tile">%1$s, %2$s in the last 2 hours. Double tap to show only this type.</string>
+    <string name="cd_summary_tile_solo">%1$s, %2$s in the last 2 hours. Showing only this type. Double tap to show all types.</string>
+
+    <string name="banner_checked">Checked %1$s</string>
+    <string name="cd_banner_scanning">Checking the page for new reports</string>
+
+    <string name="filter_all_areas">All areas</string>
+    <string name="filter_area_title">Choose an area</string>
+    <string name="filter_search_hint">Search areas</string>
+    <string name="filter_clear">Clear filters</string>
+    <string name="filter_no_areas">No areas yet. They appear once reports have been collected.</string>
+
+    <!-- Report card -->
+    <string name="card_reported">Reported %1$s · %2$s</string>
+    <string name="card_reported_about">Reported about %1$s · %2$s</string>
+    <string name="card_new">NEW</string>
+    <string name="card_old">OLD</string>
+    <string name="card_also_in">Also in %1$s</string>
+    <string name="card_source">From %1$s</string>
+    <string name="card_full_post">Full post</string>
+    <string name="card_open_facebook">Open on Facebook</string>
+    <string name="card_open_failed">No app on this phone can open that link.</string>
+    <string name="card_expand">Show the full post</string>
+    <string name="card_collapse">Show less</string>
+    <string name="card_state_expanded">Showing the full post</string>
+    <string name="card_state_collapsed">Showing a summary</string>
+    <string name="a11y_reported">reported %1$s</string>
+    <string name="a11y_old">This report is more than six hours old.</string>
+    <string name="a11y_new">New in the latest check.</string>
+
+    <!-- Empty states and list decoration -->
+    <string name="gap_title">Earlier posts unavailable</string>
+    <string name="gap_body">The app wasn\'t opened during this time</string>
+    <string name="empty_first_title">Finding checkpoints</string>
+    <string name="empty_first_body">This is the first look at the page. Reports will appear here in a moment.</string>
+    <string name="empty_offline_title">Couldn\'t reach Facebook</string>
+    <string name="empty_offline_body">Nothing is saved yet. Check your connection, then try again.</string>
+    <string name="empty_offline_action">Try again</string>
+    <string name="empty_filtered_title">Nothing matches those filters</string>
+    <string name="empty_filtered_body">Turn a type back on, or choose all areas, to see the saved reports again.</string>
+
+    <!-- Settings: background updates -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_background_header">Background updates</string>
+    <string name="settings_interval_label">Check for new reports</string>
+    <string name="settings_interval_off">Off</string>
+    <string name="settings_interval_15">15 m</string>
+    <string name="settings_interval_30">30 m</string>
+    <string name="settings_interval_60">1 h</string>
+    <string name="settings_interval_120">2 h</string>
+    <string name="settings_interval_explainer">Android may delay background checks to save battery, so an update can arrive later than the interval you choose. Setting the app to Unrestricted in battery settings makes it more reliable.</string>
+    <string name="settings_battery_button">Battery settings</string>
+
+    <!-- Settings: notifications -->
+    <string name="settings_notifications_header">Notifications</string>
+    <string name="settings_notify_switch">Tell me about new reports</string>
+    <string name="settings_notify_supporting">One quiet notification after a background check finds something less than two hours old.</string>
+    <string name="settings_notify_denied">Notifications are turned off for Checkpoint Watch, so there is nothing to send. You can turn them on in system settings.</string>
+    <string name="settings_notify_open_settings">Notification settings</string>
+    <string name="settings_notify_needs_background">Background updates are off, so no check will run to notify you. Choose an interval above.</string>
+    <string name="settings_notify_types">Tell me about</string>
+    <string name="settings_watched_label">Watched areas</string>
+    <string name="settings_watched_all">All areas</string>
+    <string name="settings_watched_change">Change</string>
+    <string name="settings_watched_sheet_title">Watched areas</string>
+    <string name="settings_watched_sheet_body">With none chosen, reports from anywhere can notify you.</string>
+
+    <!-- Settings: scan history -->
+    <string name="settings_history_header">Scan history</string>
+    <string name="settings_history_body">The last ten checks, so you can see what the app has actually been able to collect.</string>
+    <string name="settings_history_empty">No checks have run yet.</string>
+    <!-- Two independent counts, not one quantity: "3 new · 10 seen". -->
+    <string name="settings_history_counts" tools:ignore="PluralsCandidate">%1$d new · %2$d seen</string>
+    <string name="trigger_foreground">Foreground</string>
+    <string name="trigger_background">Background</string>
+    <string name="status_ok">Finished</string>
+    <string name="status_ok_with_gap">Finished, with a gap</string>
+    <string name="status_failed_network">Couldn\'t connect</string>
+    <string name="status_failed_no_data">No posts returned</string>
+    <string name="status_cancelled">Stopped early</string>
+    <string name="collector_webview">Full page</string>
+    <string name="collector_webview_dom">Page text</string>
+    <string name="collector_http">Newest post only</string>
+    <string name="collector_none">Nothing collected</string>
+
+    <!-- Settings: about -->
+    <string name="settings_about_header">About</string>
+    <string name="settings_about_source_label">Data source</string>
+    <string name="settings_about_source_name">Checkpoint Watch Auckland</string>
+    <string name="settings_about_disclaimer">Reports are submitted by the public and are not verified. Never rely on this app to decide whether it\'s safe or legal to drive.</string>
+    <string name="settings_about_version">Version %1$s</string>
+
+    <plurals name="report_count">
+        <item quantity="one">%1$d report</item>
+        <item quantity="other">%1$d reports</item>
+    </plurals>
+    <plurals name="area_count">
+        <item quantity="one">%1$d area</item>
+        <item quantity="other">%1$d areas</item>
+    </plurals>
 </resources>
