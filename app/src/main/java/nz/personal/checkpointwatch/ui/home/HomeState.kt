@@ -52,6 +52,53 @@ object BannerBuilder {
     private fun reportWord(count: Int): String = if (count == 1) "report" else "reports"
 }
 
+/** Why the list has nothing in it, which decides which empty state the screen shows. */
+enum class EmptyKind {
+    /** The list has something in it; no empty state at all. */
+    NONE,
+
+    /** There are saved reports, but the owner's filters hide all of them. */
+    FILTERED,
+
+    /** A scan is running, or is about to: nothing has gone wrong yet. */
+    SEARCHING,
+
+    /** A scan finished and stored nothing. The page simply has not had anything worth keeping. */
+    NO_REPORTS_YET,
+
+    /** The phone could not reach Facebook. */
+    OFFLINE,
+
+    /** Facebook was reached and served no posts. */
+    NO_POSTS,
+}
+
+/**
+ * Which empty state to show, from what actually happened rather than from what is left over.
+ *
+ * The distinction matters: "Couldn't reach Facebook" after a scan that worked perfectly and found
+ * nothing would send the owner off checking their connection for no reason, and a quiet "no reports
+ * yet" after a real network failure would hide a problem they could fix.
+ */
+object EmptyStateBuilder {
+
+    fun kind(
+        visibleItems: Int,
+        totalReports: Int,
+        scanning: Boolean,
+        lastStatus: ScrapeStatus?,
+    ): EmptyKind = when {
+        visibleItems > 0 -> EmptyKind.NONE
+        totalReports > 0 -> EmptyKind.FILTERED
+        scanning -> EmptyKind.SEARCHING
+        lastStatus == null -> EmptyKind.SEARCHING
+        lastStatus == ScrapeStatus.FAILED_NETWORK -> EmptyKind.OFFLINE
+        lastStatus == ScrapeStatus.FAILED_NO_DATA -> EmptyKind.NO_POSTS
+        // OK, OK_WITH_GAP and CANCELLED all mean "nothing to report", not "something is wrong".
+        else -> EmptyKind.NO_REPORTS_YET
+    }
+}
+
 /** Everything the home screen renders, built fresh from Room + settings + scan state each tick. */
 data class HomeUiState(
     val loading: Boolean,
@@ -63,8 +110,16 @@ data class HomeUiState(
     val banner: BannerUi,
     val lastChecked: Instant?,
     val totalReports: Int,
-    /** No scan has ever been recorded on this phone; the empty state says so rather than "none". */
+    /** No scan has ever been recorded on this phone; the banner says so rather than "none". */
     val firstEver: Boolean,
+    /** Why the list is empty, if it is. [EmptyKind.NONE] when there is something to show. */
+    val emptyKind: EmptyKind,
+    /**
+     * A scan the owner asked for by pulling the list down, and only that. The refresh indicator
+     * follows this rather than [scanning], so the automatic scan on open and any background scan
+     * are reported by the banner's sweep alone — no spinner drops in unasked.
+     */
+    val pullRefreshing: Boolean,
     /**
      * The moment this state was built. Relative times ("12 min ago") are rendered against it
      * rather than against `Instant.now()` read inside a composable, so the whole screen agrees
@@ -84,6 +139,8 @@ data class HomeUiState(
             lastChecked = null,
             totalReports = 0,
             firstEver = true,
+            emptyKind = EmptyKind.SEARCHING,
+            pullRefreshing = false,
             now = Instant.EPOCH,
         )
     }

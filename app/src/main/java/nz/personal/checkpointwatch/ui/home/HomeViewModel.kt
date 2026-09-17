@@ -8,6 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -59,6 +60,17 @@ class HomeViewModel(
     @Volatile
     private var forceNextOpen = false
 
+    /**
+     * True while the screen is going away only to be rebuilt — a rotation, a theme change. The scan
+     * is still cancelled, but it is not the owner leaving, so the rebuilt screen should not force a
+     * fresh scan past the coordinator's throttle the way a genuine return to the app does.
+     */
+    @Volatile
+    private var rebuilding = false
+
+    /** A scan the owner pulled down for; drives the refresh indicator, and nothing else does. */
+    private val _pullRefreshing = MutableStateFlow(false)
+
     init {
         viewModelScope.launch {
             coordinator.state.collect { state ->
@@ -92,11 +104,19 @@ class HomeViewModel(
         },
         ticker,
         neverScanned,
-    ) { snapshot, now, firstEver -> buildState(snapshot, now, firstEver) }
+        _pullRefreshing,
+    ) { snapshot, now, firstEver, pullRefreshing ->
+        buildState(snapshot, now, firstEver, pullRefreshing)
+    }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeUiState.Loading)
 
-    private fun buildState(snapshot: Snapshot, now: Instant, firstEver: Boolean): HomeUiState {
+    private fun buildState(
+        snapshot: Snapshot,
+        now: Instant,
+        firstEver: Boolean,
+        pullRefreshing: Boolean,
+    ): HomeUiState {
         val scanning = snapshot.scanState is ScanState.Scanning
         val built = HomeStateBuilder.build(snapshot.rows, snapshot.settings, now, newSince)
         val newCount = HomeStateBuilder.newReportCount(snapshot.rows, newSince)
@@ -112,6 +132,13 @@ class HomeViewModel(
             lastChecked = snapshot.lastSummary?.finishedAt,
             totalReports = built.totalReports,
             firstEver = firstEver,
+            emptyKind = EmptyStateBuilder.kind(
+                visibleItems = built.items.size,
+                totalReports = built.totalReports,
+                scanning = scanning,
+                lastStatus = snapshot.lastSummary?.status,
+            ),
+            pullRefreshing = pullRefreshing,
             now = now,
         )
     }
@@ -124,16 +151,38 @@ class HomeViewModel(
      */
     suspend fun scanOnOpen(host: WebViewHost) = runScan(host, force = forceNextOpen)
 
-    /** Pull to refresh: always forced, because the owner asked for it just now. */
-    suspend fun refresh(host: WebViewHost) = runScan(host, force = true)
+    /**
+     * Pull to refresh: always forced, because the owner asked for it just now, and the only scan
+     * that turns the refresh indicator on. The flag is cleared in `finally`, so a scan cancelled by
+     * the owner leaving takes the indicator with it.
+     */
+    suspend fun refresh(host: WebViewHost) {
+        _pullRefreshing.value = true
+        try {
+            runScan(host, force = true)
+        } finally {
+            _pullRefreshing.value = false
+        }
+    }
+
+    /**
+     * Called as the screen stops. [changingConfiguration] tells the difference between the owner
+     * leaving — after which the next open should scan however recently the last one ran — and a
+     * rotation, after which forcing a second scan seconds later would be pure waste.
+     */
+    fun onStopping(changingConfiguration: Boolean) {
+        rebuilding = changingConfiguration
+    }
 
     private suspend fun runScan(host: WebViewHost, force: Boolean) {
         forceNextOpen = false
         try {
             coordinator.scan(ScanTrigger.FOREGROUND, host, force)
         } catch (cancellation: CancellationException) {
-            forceNextOpen = true
+            forceNextOpen = !rebuilding
             throw cancellation
+        } finally {
+            rebuilding = false
         }
     }
 

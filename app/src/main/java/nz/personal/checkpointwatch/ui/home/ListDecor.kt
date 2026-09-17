@@ -157,18 +157,22 @@ fun EmptyState(
     }
 }
 
-/** Picks the right empty state for why the list has nothing in it. */
+/**
+ * The empty state for [kind]. Which one that is was decided by [EmptyStateBuilder] from what the
+ * last scan actually did, so this only has to say it — there is no guessing left here.
+ */
 @Composable
 fun HomeEmptyState(
-    totalReports: Int,
-    scanning: Boolean,
+    kind: EmptyKind,
     onClearFilters: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
-    when {
-        totalReports > 0 -> EmptyState(
+    when (kind) {
+        EmptyKind.NONE -> Unit
+
+        EmptyKind.FILTERED -> EmptyState(
             icon = CwIcons.Funnel,
             tint = scheme.primary,
             container = scheme.primary.copy(alpha = 0.14f),
@@ -179,7 +183,7 @@ fun HomeEmptyState(
             modifier = modifier,
         )
 
-        scanning -> EmptyState(
+        EmptyKind.SEARCHING -> EmptyState(
             icon = CwIcons.Radar,
             tint = scheme.primary,
             container = scheme.primary.copy(alpha = 0.14f),
@@ -188,12 +192,34 @@ fun HomeEmptyState(
             modifier = modifier,
         )
 
-        else -> EmptyState(
+        EmptyKind.NO_REPORTS_YET -> EmptyState(
+            icon = CwIcons.Clock,
+            tint = scheme.onSurfaceVariant,
+            container = scheme.surfaceContainerHigh,
+            title = stringResource(R.string.empty_none_yet_title),
+            body = stringResource(R.string.empty_none_yet_body),
+            actionLabel = stringResource(R.string.empty_none_yet_action),
+            onAction = onRetry,
+            modifier = modifier,
+        )
+
+        EmptyKind.OFFLINE -> EmptyState(
             icon = CwIcons.CloudOff,
             tint = scheme.onSurfaceVariant,
             container = scheme.surfaceContainerHigh,
             title = stringResource(R.string.empty_offline_title),
             body = stringResource(R.string.empty_offline_body),
+            actionLabel = stringResource(R.string.empty_offline_action),
+            onAction = onRetry,
+            modifier = modifier,
+        )
+
+        EmptyKind.NO_POSTS -> EmptyState(
+            icon = CwIcons.Info,
+            tint = scheme.onSurfaceVariant,
+            container = scheme.surfaceContainerHigh,
+            title = stringResource(R.string.empty_no_posts_title),
+            body = stringResource(R.string.empty_no_posts_body),
             actionLabel = stringResource(R.string.empty_offline_action),
             onAction = onRetry,
             modifier = modifier,

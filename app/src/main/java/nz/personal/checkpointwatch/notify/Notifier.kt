@@ -15,13 +15,9 @@ import nz.personal.checkpointwatch.ui.MainActivity
 
 /** One channel, so the owner can silence or tune road reports without silencing the app. */
 private const val CHANNEL_ID = "new_reports"
-private const val CHANNEL_NAME = "New reports"
 
 /** One id: each scan's notification replaces the last, rather than stacking up overnight. */
 private const val NOTIFICATION_ID = 1
-
-/** The app's amber accent, used for the notification's icon tint. */
-private const val ACCENT_COLOUR = 0xFFFFB020.toInt()
 
 /**
  * Posts the one notification a background scan earned, as [NotificationPlanner] worded it.
@@ -45,9 +41,22 @@ class Notifier(context: Context) {
     fun ensureChannel() {
         NotificationManagerCompat.from(context).createNotificationChannel(
             NotificationChannelCompat.Builder(CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_DEFAULT)
-                .setName(CHANNEL_NAME)
+                .setName(context.getString(R.string.notification_channel_name))
                 .build(),
         )
+    }
+
+    /**
+     * Whether a notification posted right now would go nowhere. Two separate switches can stop it:
+     * notifications off for the whole app, and the "New reports" channel muted on its own once it
+     * exists. A settings screen that only checked the first would insist everything was fine while
+     * the owner heard nothing.
+     */
+    fun notificationsBlocked(): Boolean {
+        val manager = NotificationManagerCompat.from(context)
+        if (!manager.areNotificationsEnabled()) return true
+        val channel = manager.getNotificationChannelCompat(CHANNEL_ID) ?: return false
+        return channel.importance == NotificationManagerCompat.IMPORTANCE_NONE
     }
 
     fun show(plan: NotificationPlanner.Plan?) {
@@ -72,7 +81,7 @@ class Notifier(context: Context) {
             .setContentTitle(plan.title)
             .setContentText(plan.lines.first())
             .setStyle(style)
-            .setColor(ACCENT_COLOUR)
+            .setColor(ContextCompat.getColor(context, R.color.beacon_amber))
             .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)

@@ -29,9 +29,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,7 +48,6 @@ import kotlinx.coroutines.launch
 import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.ui.CwIcons
-import java.time.Instant
 
 /** Wide screens get a reading column rather than a 1200 px line of text. */
 private val MAX_CONTENT_WIDTH = 640.dp
@@ -118,7 +118,10 @@ fun HomeContent(
     ) { innerPadding ->
         val direction = LocalLayoutDirection.current
         PullToRefreshBox(
-            isRefreshing = state.scanning,
+            // Only a scan the owner pulled down for. An automatic scan on open, or one the
+            // background worker started, is reported by the banner's sweep — a spinner nobody asked
+            // for dropping in over the list is exactly what the design rules out.
+            isRefreshing = state.pullRefreshing,
             onRefresh = {
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                 callbacks.onRefresh()
@@ -167,6 +170,7 @@ private fun ReportList(
                     summary = state.summary,
                     now = state.now,
                     hiddenTypes = state.settings.hiddenTypes,
+                    loading = state.loading,
                     onSoloType = callbacks.onSoloType,
                 )
             }
@@ -195,12 +199,11 @@ private fun ReportList(
             }
         }
 
-        if (state.items.isEmpty() && !state.loading) {
+        if (state.emptyKind != EmptyKind.NONE && !state.loading) {
             item(key = "empty", contentType = "empty") {
                 PageWidth(Modifier.animateItem()) {
                     HomeEmptyState(
-                        totalReports = state.totalReports,
-                        scanning = state.scanning || state.firstEver,
+                        kind = state.emptyKind,
                         onClearFilters = callbacks.onClearFilters,
                         onRetry = callbacks.onRefresh,
                     )
@@ -268,10 +271,12 @@ private fun ConfirmOnNewReports(state: HomeUiState, haptics: HapticFeedback) {
     val newCount = remember(state.items) {
         state.items.count { it is ListItem.Report && it.report.isNew }
     }
-    var lastConfirmed by remember { mutableStateOf<Instant?>(null) }
+    // Saved, not just remembered: coming back from Settings or rotating rebuilds this composable,
+    // and a plain remember would let the same scan's result buzz a second time.
+    var lastConfirmed by rememberSaveable { mutableLongStateOf(0L) }
     LaunchedEffect(state.scanning, state.lastChecked, newCount) {
-        val checked = state.lastChecked
-        if (!state.scanning && checked != null && checked != lastConfirmed && newCount > 0) {
+        val checked = state.lastChecked?.toEpochMilli() ?: return@LaunchedEffect
+        if (!state.scanning && checked != lastConfirmed && newCount > 0) {
             lastConfirmed = checked
             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
         }

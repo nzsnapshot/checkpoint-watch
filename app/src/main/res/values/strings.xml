@@ -8,6 +8,13 @@
     <string name="type_crash">Crash</string>
     <string name="type_camera">Speed camera</string>
     <string name="type_other">Update</string>
+    <!-- Short forms, for the summary tiles: one line at normal text size. The full name above is
+         what a screen reader hears. -->
+    <string name="type_checkpoint_short">Checkpoint</string>
+    <string name="type_police_short">Police</string>
+    <string name="type_crash_short">Crash</string>
+    <string name="type_camera_short">Camera</string>
+    <string name="type_other_short">Other</string>
 
     <!-- Home -->
     <string name="home_title">Checkpoint Watch</string>
@@ -17,11 +24,18 @@
     <string name="summary_window">Last 2 hours</string>
     <string name="summary_freshest">Freshest report %1$s</string>
     <string name="summary_quiet">Quiet right now</string>
-    <string name="cd_summary_tile">%1$s, %2$s in the last 2 hours. Double tap to show only this type.</string>
-    <string name="cd_summary_tile_solo">%1$s, %2$s in the last 2 hours. Showing only this type. Double tap to show all types.</string>
+    <string name="summary_placeholder">\u2013</string>
+    <string name="cd_summary_tile">%1$s, %2$s in the last 2 hours</string>
+    <string name="cd_summary_tile_loading">%1$s, still counting</string>
+    <string name="summary_tile_state_solo">Showing only %1$s</string>
+    <string name="summary_tile_state_all">Showing all types</string>
+    <string name="summary_tile_action_solo">Show only %1$s</string>
+    <string name="summary_tile_action_all">Show all types</string>
 
     <string name="banner_checked">Checked %1$s</string>
     <string name="cd_banner_scanning">Checking the page for new reports</string>
+    <!-- The banner read as one polite announcement: the message, then when it last checked. -->
+    <string name="cd_banner">%1$s. %2$s</string>
 
     <string name="filter_all_areas">All areas</string>
     <string name="filter_area_title">Choose an area</string>
@@ -57,6 +71,11 @@
     <string name="empty_offline_action">Try again</string>
     <string name="empty_filtered_title">Nothing matches those filters</string>
     <string name="empty_filtered_body">Turn a type back on, or choose all areas, to see the saved reports again.</string>
+    <string name="empty_no_posts_title">No posts came back</string>
+    <string name="empty_no_posts_body">Facebook was reached but didn\'t return any posts this time.</string>
+    <string name="empty_none_yet_title">No reports yet</string>
+    <string name="empty_none_yet_body">Nothing has been posted that this app could pick up. It will keep looking each time you open it.</string>
+    <string name="empty_none_yet_action">Check again</string>
 
     <!-- Settings: background updates -->
     <string name="settings_title">Settings</string>
@@ -108,6 +127,9 @@
     <string name="settings_about_source_name">Checkpoint Watch Auckland</string>
     <string name="settings_about_disclaimer">Reports are submitted by the public and are not verified. Never rely on this app to decide whether it\'s safe or legal to drive.</string>
     <string name="settings_about_version">Version %1$s</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_name">New reports</string>
 
     <plurals name="report_count">
         <item quantity="one">%1$d report</item>

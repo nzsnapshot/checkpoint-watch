@@ -92,6 +92,13 @@ val CheckpointLightColors: ColorScheme = lightColorScheme(
 )
 
 /**
+ * The border of an unselected chip. `ColorScheme` has no role for "a control outline that has to
+ * carry its own shape", and `outline` is tuned for dividers, so this rides alongside the scheme.
+ */
+val ColorScheme.chipOutline: Color
+    get() = if (surface == DarkSurface) DarkChipOutline else LightChipOutline
+
+/**
  * Follows the system light/dark setting, and nothing else. The system bars are made transparent by
  * `enableEdgeToEdge()` in the Activity, which also keeps their icons legible in both themes.
  *

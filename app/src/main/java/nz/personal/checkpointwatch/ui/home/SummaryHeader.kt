@@ -2,15 +2,18 @@ package nz.personal.checkpointwatch.ui.home
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
@@ -29,7 +32,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.ui.CwIcons
@@ -48,6 +53,14 @@ private val TILE_TYPES = listOf(
 /** Below this the four tiles stop fitting side by side and fold into two rows of two. */
 private val NARROW_WIDTH = 360.dp
 
+/**
+ * The tile label, sized so the longest of them ("Checkpoint") sits on one line in a four-up row on
+ * an ordinary phone: at 392 dp that leaves each tile about 68 dp of text, and this needs 59 dp.
+ * `labelMedium` at its default tracking needed 72 dp and broke the word in half.
+ */
+private val TILE_LABEL_SIZE = 11.sp
+private val TILE_PADDING = 8.dp
+
 /** Above this font scale the labels wrap badly in a row of four, so they fold as well. */
 private const val LARGE_FONT_SCALE = 1.3f
 
@@ -58,12 +71,17 @@ private const val LARGE_FONT_SCALE = 1.3f
  * Each tile is also a shortcut — tapping one narrows the list to that type, tapping it again puts
  * everything back — so the answer to "just show me the checkpoints" is one tap from the top of
  * the screen.
+ *
+ * @param loading true until Room has emitted. The tiles hold a placeholder rather than a zero: a
+ *   confident "0 checkpoints · Quiet right now" that turns into four counts a frame later is worse
+ *   than saying nothing yet.
  */
 @Composable
 fun SummaryHeader(
     summary: Summary,
     now: Instant,
     hiddenTypes: Set<ReportType>,
+    loading: Boolean,
     onSoloType: (ReportType) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -80,37 +98,50 @@ fun SummaryHeader(
             val stacked = maxWidth < NARROW_WIDTH || fontScale >= LARGE_FONT_SCALE
             if (stacked) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TileRow(TILE_TYPES.take(2), summary, hiddenTypes, onSoloType)
-                    TileRow(TILE_TYPES.drop(2), summary, hiddenTypes, onSoloType)
+                    TileRow(TILE_TYPES.take(2), summary, hiddenTypes, loading, onSoloType)
+                    TileRow(TILE_TYPES.drop(2), summary, hiddenTypes, loading, onSoloType)
                 }
             } else {
-                TileRow(TILE_TYPES, summary, hiddenTypes, onSoloType)
+                TileRow(TILE_TYPES, summary, hiddenTypes, loading, onSoloType)
             }
         }
 
-        FreshestLine(
-            freshest = summary.freshest,
-            now = now,
-            modifier = Modifier.padding(top = 12.dp, start = 4.dp),
-        )
+        if (!loading) {
+            FreshestLine(
+                freshest = summary.freshest,
+                now = now,
+                modifier = Modifier.padding(top = 12.dp, start = 4.dp),
+            )
+        }
     }
 }
 
+/**
+ * `IntrinsicSize.Min` measures the tallest tile first and gives every tile that height, so a label
+ * that wraps onto two lines cannot leave the row with ragged bottoms.
+ */
 @Composable
 private fun TileRow(
     types: List<ReportType>,
     summary: Summary,
     hiddenTypes: Set<ReportType>,
+    loading: Boolean,
     onSoloType: (ReportType) -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+        modifier = Modifier.height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         types.forEach { type ->
             SummaryTile(
                 type = type,
                 count = summary.counts[type] ?: 0,
+                loading = loading,
                 solo = TypeFilter.isSolo(hiddenTypes, type),
                 onClick = { onSoloType(type) },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
             )
         }
     }
@@ -120,19 +151,35 @@ private fun TileRow(
 private fun SummaryTile(
     type: ReportType,
     count: Int,
+    loading: Boolean,
     solo: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val style = typeStyle(type)
     val scheme = MaterialTheme.colorScheme
-    val muted = count == 0
+    val muted = loading || count == 0
     val countColour = if (muted) scheme.onSurfaceVariant else scheme.onSurface
-    val description = stringResource(
-        if (solo) R.string.cd_summary_tile_solo else R.string.cd_summary_tile,
-        style.label,
-        pluralStringResource(R.plurals.report_count, count, count),
-    )
+    val description = if (loading) {
+        stringResource(R.string.cd_summary_tile_loading, style.label)
+    } else {
+        stringResource(
+            R.string.cd_summary_tile,
+            style.label,
+            pluralStringResource(R.plurals.report_count, count, count),
+        )
+    }
+    val state = if (solo) {
+        stringResource(R.string.summary_tile_state_solo, style.label)
+    } else {
+        stringResource(R.string.summary_tile_state_all)
+    }
+    val action = if (solo) {
+        stringResource(R.string.summary_tile_action_all)
+    } else {
+        stringResource(R.string.summary_tile_action_solo, style.label)
+    }
+    val placeholder = stringResource(R.string.summary_placeholder)
 
     Column(
         modifier = modifier
@@ -143,16 +190,19 @@ private fun SummaryTile(
                 color = if (solo) style.color else Color.Transparent,
                 shape = RoundedCornerShape(16.dp),
             )
-            .selectable(selected = solo, role = Role.Tab, onClick = onClick)
+            // A button that says what it will do, rather than a tab that leaves the owner to guess.
+            .clickable(onClickLabel = action, role = Role.Button, onClick = onClick)
             // One spoken sentence per tile: the icon, the number and the label separately would be
             // read as three fragments, and the number alone tells the owner nothing.
-            .semantics(mergeDescendants = true) { contentDescription = description },
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .semantics(mergeDescendants = true) {
+                contentDescription = description
+                stateDescription = state
+            },
     ) {
         Column(
             modifier = Modifier
                 .clearAndSetSemantics { }
-                .padding(horizontal = 10.dp, vertical = 12.dp),
+                .padding(horizontal = TILE_PADDING, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Box(
@@ -170,13 +220,16 @@ private fun SummaryTile(
                 )
             }
             Text(
-                text = count.toString(),
+                text = if (loading) placeholder else count.toString(),
                 style = MaterialTheme.typography.headlineSmall,
                 color = countColour,
             )
             Text(
-                text = style.label,
-                style = MaterialTheme.typography.labelMedium,
+                text = style.shortLabel,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontSize = TILE_LABEL_SIZE,
+                    letterSpacing = 0.sp,
+                ),
                 color = scheme.onSurfaceVariant,
             )
         }

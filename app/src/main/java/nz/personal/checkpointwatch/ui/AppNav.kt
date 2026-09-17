@@ -23,9 +23,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -121,8 +121,16 @@ private fun SettingsRoute(onBack: () -> Unit) {
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        blocked = !granted
+        // Granted is not the same as audible: the channel can still be muted on its own.
+        blocked = !granted || viewModel.notificationsBlocked()
         viewModel.setNotify(granted)
+    }
+
+    // The owner can mute the channel in system settings and come straight back, so the notice is
+    // re-checked every time this screen resumes rather than only when the switch is touched.
+    LifecycleResumeEffect(state.settings.notify) {
+        blocked = state.settings.notify && viewModel.notificationsBlocked()
+        onPauseOrDispose { }
     }
 
     val callbacks = remember(viewModel, context, onBack) {
@@ -145,8 +153,7 @@ private fun SettingsRoute(onBack: () -> Unit) {
                             ) != PackageManager.PERMISSION_GRANTED ->
                             permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
 
-                        !NotificationManagerCompat.from(context).areNotificationsEnabled() ->
-                            blocked = true
+                        viewModel.notificationsBlocked() -> blocked = true
 
                         else -> {
                             blocked = false
@@ -156,7 +163,8 @@ private fun SettingsRoute(onBack: () -> Unit) {
                 }
             },
             onToggleNotifyType = viewModel::toggleNotifyType,
-            onWatchedSuburbs = viewModel::setWatchedSuburbs,
+            onToggleWatchedSuburb = viewModel::toggleWatchedSuburb,
+            onClearWatchedSuburbs = viewModel::clearWatchedSuburbs,
             onBatterySettings = {
                 context.open(
                     Intent(
@@ -174,7 +182,8 @@ private fun SettingsRoute(onBack: () -> Unit) {
         )
     }
 
-    SettingsContent(state = state.copy(notificationsBlocked = blocked), callbacks = callbacks)
+    val shown = remember(state, blocked) { state.copy(notificationsBlocked = blocked) }
+    SettingsContent(state = shown, callbacks = callbacks)
 }
 
 /** Opens a link in whatever the owner uses for the web. False when the phone has nothing. */

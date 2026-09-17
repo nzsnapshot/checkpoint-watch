@@ -35,6 +35,13 @@ val DarkOnSurfaceVariant = Color(0xFF93A1BC)
 val DarkOutline = Color(0xFF2A3655)
 val DarkOutlineVariant = Color(0xFF202B45)
 
+/**
+ * The outline of an unselected chip. `outline` is a divider colour — 1.57:1 against the dark
+ * background — and a chip's border is the whole of its shape, which WCAG asks to reach 3:1 like any
+ * other control boundary. This measures 3.51:1 on the background and 3.23:1 on a card.
+ */
+val DarkChipOutline = Color(0xFF5A6B90)
+
 val DarkPrimary = Color(0xFFFFB020)
 val DarkOnPrimary = Color(0xFF1A1200)
 val DarkPrimaryContainer = Color(0xFF4A3204)
@@ -75,6 +82,9 @@ val LightOnSurface = Color(0xFF0B1220)
 val LightOnSurfaceVariant = Color(0xFF5B677D)
 val LightOutline = Color(0xFFD5DBE8)
 val LightOutlineVariant = Color(0xFFE2E7F1)
+
+/** As [DarkChipOutline]: `outline` is 1.29:1 here, this is 3.37:1 on the background, 3.61:1 on a card. */
+val LightChipOutline = Color(0xFF7C879E)
 
 val LightPrimary = Color(0xFF9A5B00)
 val LightOnPrimary = Color(0xFFFFFFFF)

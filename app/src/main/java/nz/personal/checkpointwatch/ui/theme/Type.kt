@@ -35,6 +35,12 @@ val AppTypography: Typography = Default.copy(
         fontFeatureSettings = TABULAR_FIGURES,
     ),
     // The hero of a report card: the road name.
+    // The collapsed top bar's title. Same weight as the expanded one, so the bar does not appear
+    // to change its mind about how bold it is as you scroll.
+    titleLarge = Default.titleLarge.copy(
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = (-0.2).sp,
+    ),
     titleMedium = Default.titleMedium.copy(
         fontWeight = FontWeight.SemiBold,
         fontSize = 17.sp,

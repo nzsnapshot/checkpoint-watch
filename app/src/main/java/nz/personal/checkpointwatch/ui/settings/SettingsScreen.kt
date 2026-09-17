@@ -2,6 +2,7 @@ package nz.personal.checkpointwatch.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,7 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,18 +47,20 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
-import nz.personal.checkpointwatch.Constants
 import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.scan.ALLOWED_BACKGROUND_MINUTES
 import nz.personal.checkpointwatch.ui.CwIcons
-import nz.personal.checkpointwatch.ui.TimeFormat
+import nz.personal.checkpointwatch.ui.theme.chipOutline
 import nz.personal.checkpointwatch.ui.typeStyle
 
 private val MAX_CONTENT_WIDTH = 640.dp
 
 /** Beyond this font scale five segmented buttons stop fitting, so the choice becomes a list. */
-private const val SEGMENTED_MAX_FONT_SCALE = 1.5f
+private const val SEGMENTED_MAX_FONT_SCALE = 1.3f
+
+/** Below this width they do not fit either, whatever the text size. */
+private val SEGMENTED_MIN_WIDTH = 360.dp
 
 /** Everything the settings screen can be asked to do. */
 @Immutable
@@ -66,7 +69,8 @@ data class SettingsCallbacks(
     val onInterval: (Int) -> Unit,
     val onNotifyChange: (Boolean) -> Unit,
     val onToggleNotifyType: (ReportType) -> Unit,
-    val onWatchedSuburbs: (Set<String>) -> Unit,
+    val onToggleWatchedSuburb: (String) -> Unit,
+    val onClearWatchedSuburbs: () -> Unit,
     val onBatterySettings: () -> Unit,
     val onNotificationSettings: () -> Unit,
 )
@@ -158,7 +162,19 @@ private fun BackgroundSection(state: SettingsUiState, callbacks: SettingsCallbac
  */
 @Composable
 private fun IntervalChoice(selected: Int, onSelect: (Int) -> Unit) {
-    val stacked = LocalDensity.current.fontScale >= SEGMENTED_MAX_FONT_SCALE
+    BoxWithConstraints {
+        val stacked = LocalDensity.current.fontScale >= SEGMENTED_MAX_FONT_SCALE ||
+            maxWidth < SEGMENTED_MIN_WIDTH
+        IntervalChoiceLayout(selected = selected, stacked = stacked, onSelect = onSelect)
+    }
+}
+
+/**
+ * "15 m" truncated to "15…" would be worse than useless, so nothing here is allowed to ellipsise:
+ * when the labels stop fitting, the control changes shape instead.
+ */
+@Composable
+private fun IntervalChoiceLayout(selected: Int, stacked: Boolean, onSelect: (Int) -> Unit) {
     if (stacked) {
         Column(modifier = Modifier.fillMaxWidth()) {
             ALLOWED_BACKGROUND_MINUTES.forEach { minutes ->
@@ -192,7 +208,7 @@ private fun IntervalChoice(selected: Int, onSelect: (Int) -> Unit) {
                     modifier = Modifier.minimumInteractiveComponentSize(),
                     shape = SegmentedButtonDefaults.itemShape(index, ALLOWED_BACKGROUND_MINUTES.size),
                     icon = {},
-                    label = { Text(stringResource(IntervalUi.label(minutes)), maxLines = 1) },
+                    label = { Text(stringResource(IntervalUi.label(minutes)), maxLines = 1, softWrap = false) },
                 )
             }
         }
@@ -278,7 +294,8 @@ private fun NotificationsSection(state: SettingsUiState, callbacks: SettingsCall
         WatchedAreasSheet(
             suburbs = state.suburbs,
             chosen = state.settings.watchedSuburbs,
-            onChange = callbacks.onWatchedSuburbs,
+            onToggle = callbacks.onToggleWatchedSuburb,
+            onClearAll = callbacks.onClearWatchedSuburbs,
             onDismiss = { sheetOpen = false },
         )
     }
@@ -300,11 +317,18 @@ private fun TypeChips(chosen: Set<ReportType>, enabled: Boolean, onToggle: (Repo
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 pair.forEach { type ->
                     val style = typeStyle(type)
+                    val ticked = enabled && type in chosen
                     FilterChip(
                         modifier = Modifier.minimumInteractiveComponentSize(),
-                        selected = enabled && type in chosen,
+                        selected = ticked,
                         enabled = enabled,
                         onClick = { onToggle(type) },
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = enabled,
+                            selected = ticked,
+                            borderColor = scheme.chipOutline,
+                            disabledBorderColor = scheme.chipOutline.copy(alpha = 0.4f),
+                        ),
                         label = { Text(style.label, maxLines = 1) },
                         leadingIcon = {
                             Icon(

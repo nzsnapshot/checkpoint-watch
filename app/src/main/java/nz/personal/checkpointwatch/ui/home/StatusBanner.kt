@@ -17,11 +17,13 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -33,9 +35,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -52,6 +56,12 @@ private const val SWEEP_DURATION_MS = 1500
 private const val SWEEP_BAND_FRACTION = 0.45f
 
 private val TRACK_HEIGHT = 3.dp
+
+/** Above this font scale "Checked 3 min ago" stops fitting beside the message and moves below it. */
+private const val STACK_FONT_SCALE = 1.3f
+
+/** Beside the message, the trailing line never takes more of the width than this. */
+private val TRAILING_MAX_WIDTH = 132.dp
 
 /**
  * What the last (or current) scan has to say, in one calm line.
@@ -74,38 +84,69 @@ fun StatusBanner(
     val scheme = MaterialTheme.colorScheme
     val checked = lastChecked?.let { stringResource(R.string.banner_checked, TimeFormat.ago(it, now)) }
     val scanningDescription = stringResource(R.string.cd_banner_scanning)
+    val spoken = message ?: scanningDescription
+    val announcement = if (checked == null) spoken else stringResource(R.string.cd_banner, spoken, checked)
+    val stacked = LocalDensity.current.fontScale >= STACK_FONT_SCALE
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(scheme.surfaceContainer)
-            .semantics { liveRegion = LiveRegionMode.Polite },
+            // The whole banner is one polite announcement. Without the merge there is no text on
+            // this node to announce, and the message itself lives inside an AnimatedContent whose
+            // node identity changes with every result — so the region would never fire.
+            .semantics(mergeDescendants = true) {
+                liveRegion = LiveRegionMode.Polite
+                contentDescription = announcement
+            },
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        val text: @Composable () -> Unit = {
             AnimatedContent(
                 targetState = message.orEmpty(),
                 transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) },
                 label = "banner-text",
-                modifier = Modifier.weight(1f, fill = true),
-            ) { text ->
+            ) { value ->
                 Text(
-                    text = text,
+                    text = value,
                     style = MaterialTheme.typography.bodyMedium,
                     color = scheme.onSurface,
                 )
             }
+        }
+        val trailing: @Composable () -> Unit = {
             if (checked != null) {
                 Text(
                     text = checked,
                     style = MaterialTheme.typography.bodySmall,
                     color = scheme.onSurfaceVariant,
-                    textAlign = TextAlign.End,
+                    textAlign = if (stacked) TextAlign.Start else TextAlign.End,
+                    modifier = if (stacked) Modifier else Modifier.widthIn(max = TRAILING_MAX_WIDTH),
                 )
+            }
+        }
+
+        // Read once, from the container above; the pieces below are only there to be looked at.
+        Box(modifier = Modifier.clearAndSetSemantics { }) {
+            if (stacked) {
+                // At large text "Checked 3 min ago" no longer fits beside the message, so it goes
+                // underneath it rather than squeezing the message into one word per line.
+                Column(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    text()
+                    trailing()
+                }
+            } else {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Box(modifier = Modifier.weight(1f)) { text() }
+                    trailing()
+                }
             }
         }
         AnimatedVisibility(
@@ -113,9 +154,7 @@ fun StatusBanner(
             enter = fadeIn(tween(160)) + expandVertically(),
             exit = fadeOut(tween(160)) + shrinkVertically(),
         ) {
-            SweepTrack(
-                modifier = Modifier.semantics { contentDescription = scanningDescription },
-            )
+            SweepTrack()
         }
     }
 }

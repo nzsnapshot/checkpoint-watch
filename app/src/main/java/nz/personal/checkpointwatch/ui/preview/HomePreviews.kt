@@ -57,6 +57,18 @@ private fun HomeFirstRunPreview() = Preview(SampleData.firstRun, dark = true)
 @Composable
 private fun HomeOfflinePreview() = Preview(SampleData.offline, dark = false)
 
+@Preview(name = "Home · page returned nothing", showBackground = true, backgroundColor = 0xFF0B1220)
+@Composable
+private fun HomeNoPostsPreview() = Preview(SampleData.noPosts, dark = true)
+
+@Preview(name = "Home · nothing reported yet", showBackground = true, backgroundColor = 0xFF0B1220)
+@Composable
+private fun HomeNothingYetPreview() = Preview(SampleData.nothingYet, dark = true)
+
+@Preview(name = "Home · pulled to refresh", showBackground = true, backgroundColor = 0xFF0B1220)
+@Composable
+private fun HomePullRefreshingPreview() = Preview(SampleData.pullRefreshing, dark = true)
+
 @Preview(name = "Home · nothing matches the filters", showBackground = true, backgroundColor = 0xFF0B1220)
 @Composable
 private fun HomeFilteredOutPreview() = Preview(SampleData.filteredOut, dark = true)

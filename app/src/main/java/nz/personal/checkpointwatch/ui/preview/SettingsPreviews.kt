@@ -12,7 +12,8 @@ internal val NoSettingsCallbacks = SettingsCallbacks(
     onInterval = {},
     onNotifyChange = {},
     onToggleNotifyType = {},
-    onWatchedSuburbs = {},
+    onToggleWatchedSuburb = {},
+    onClearWatchedSuburbs = {},
     onBatterySettings = {},
     onNotificationSettings = {},
 )

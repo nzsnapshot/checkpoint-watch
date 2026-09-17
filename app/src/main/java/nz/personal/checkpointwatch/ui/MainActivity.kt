@@ -97,6 +97,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        // Before super, which is what dispatches ON_STOP and so cancels the scan: the ViewModel has
+        // to know whether this is the owner leaving or just a rotation before the cancellation
+        // reaches it.
+        homeViewModel.onStopping(changingConfiguration = isChangingConfigurations)
         refreshJob?.cancel()
         super.onStop()
     }

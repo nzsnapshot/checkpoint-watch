@@ -26,6 +26,7 @@ import nz.personal.checkpointwatch.scan.BackgroundScheduler
 import nz.personal.checkpointwatch.settings.Settings
 import nz.personal.checkpointwatch.settings.SettingsStore
 import java.time.Instant
+import java.util.Locale
 
 /** How many past scans the settings screen shows. */
 private const val HISTORY_LIMIT = 10
@@ -118,6 +119,27 @@ object ScanHistoryUi {
     }
 }
 
+/**
+ * Adding and removing a watched suburb.
+ *
+ * Suburbs come out of the parser upper-case ("HENDERSON") and are stored that way, but a value
+ * saved by an earlier version — or a list that cased them differently — must still untick, so
+ * matching is case-insensitive in both directions. A toggle that can add but not remove is the
+ * worst kind of setting.
+ */
+object WatchedSuburbs {
+
+    fun toggle(current: Set<String>, suburb: String): Set<String> {
+        val name = suburb.trim().uppercase(Locale.ENGLISH)
+        if (name.isEmpty()) return current
+        val without = current.filterNotTo(LinkedHashSet()) { it.trim().equals(name, ignoreCase = true) }
+        return if (without.size < current.size) without else without.apply { add(name) }
+    }
+
+    fun isWatched(current: Set<String>, suburb: String): Boolean =
+        current.any { it.trim().equals(suburb.trim(), ignoreCase = true) }
+}
+
 /** What each offered background interval is called. Pure, so the five buttons cannot disagree. */
 object IntervalUi {
 
@@ -192,9 +214,28 @@ class SettingsViewModel(
         }
     }
 
-    fun setWatchedSuburbs(suburbs: Set<String>) {
-        viewModelScope.launch { settingsStore.update { it.copy(watchedSuburbs = suburbs) } }
+    /**
+     * Ticks or unticks one suburb, deciding from the stored set inside the same atomic update.
+     * Working out the new set from what a composition last saw would drop a tick whenever two taps
+     * landed before the store emitted again.
+     */
+    fun toggleWatchedSuburb(suburb: String) {
+        viewModelScope.launch {
+            settingsStore.update { it.copy(watchedSuburbs = WatchedSuburbs.toggle(it.watchedSuburbs, suburb)) }
+        }
     }
+
+    /** "All areas": an empty set means anywhere can notify. */
+    fun clearWatchedSuburbs() {
+        viewModelScope.launch { settingsStore.update { it.copy(watchedSuburbs = emptySet()) } }
+    }
+
+    /**
+     * Whether a notification posted right now would actually be seen. Notifications can be off for
+     * the whole app, and the "New reports" channel can be muted on its own once it exists — the
+     * switch should tell the same truth in both cases.
+     */
+    fun notificationsBlocked(): Boolean = notifier.notificationsBlocked()
 
     private fun readVersion(context: Context): String = try {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()

@@ -38,6 +38,12 @@ data class TypeStyle(
     val container: Color,
     val icon: ImageVector,
     val label: String,
+    /**
+     * A one-line form for the summary tiles ("Police", not "Police presence"), which are four
+     * across on a phone. These are the same category names the filter chips use, so the type
+     * language stays one language; [label] is what a screen reader hears, so nothing is lost.
+     */
+    val shortLabel: String,
 )
 
 /** The style for [type], resolved against the current light/dark scheme. */
@@ -67,8 +73,23 @@ fun typeStyle(type: ReportType): TypeStyle {
             ReportType.OTHER -> R.string.type_other
         },
     )
-    return remember(color, icon, label) {
-        TypeStyle(color = color, container = color.copy(alpha = CONTAINER_ALPHA), icon = icon, label = label)
+    val shortLabel = stringResource(
+        when (type) {
+            ReportType.CHECKPOINT -> R.string.type_checkpoint_short
+            ReportType.POLICE_PRESENCE -> R.string.type_police_short
+            ReportType.CRASH -> R.string.type_crash_short
+            ReportType.SPEED_CAMERA -> R.string.type_camera_short
+            ReportType.OTHER -> R.string.type_other_short
+        },
+    )
+    return remember(color, icon, label, shortLabel) {
+        TypeStyle(
+            color = color,
+            container = color.copy(alpha = CONTAINER_ALPHA),
+            icon = icon,
+            label = label,
+            shortLabel = shortLabel,
+        )
     }
 }
 

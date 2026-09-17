@@ -49,7 +49,8 @@ import nz.personal.checkpointwatch.ui.CwIcons
 fun WatchedAreasSheet(
     suburbs: List<String>,
     chosen: Set<String>,
-    onChange: (Set<String>) -> Unit,
+    onToggle: (String) -> Unit,
+    onClearAll: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -87,7 +88,7 @@ fun WatchedAreasSheet(
             )
             if (chosen.isNotEmpty()) {
                 TextButton(
-                    onClick = { onChange(emptySet()) },
+                    onClick = onClearAll,
                     modifier = Modifier.minimumInteractiveComponentSize(),
                 ) {
                     Text(stringResource(R.string.settings_watched_all))
@@ -106,17 +107,17 @@ fun WatchedAreasSheet(
                 }
             }
             items(matches, key = { it }, contentType = { "area" }) { suburb ->
-                val ticked = chosen.any { it.equals(suburb, ignoreCase = true) }
+                val ticked = WatchedSuburbs.isWatched(chosen, suburb)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 52.dp)
+                        // The name only. What the set becomes is decided inside the store's own
+                        // read-modify-write, not from the snapshot this composition happens to hold.
                         .toggleable(
                             value = ticked,
                             role = Role.Checkbox,
-                            onValueChange = { on ->
-                                onChange(if (on) chosen + suburb else chosen - suburb)
-                            },
+                            onValueChange = { onToggle(suburb) },
                         )
                         .padding(horizontal = 20.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,

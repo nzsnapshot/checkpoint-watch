@@ -9,6 +9,7 @@ import nz.personal.checkpointwatch.ui.AreaMention
 import nz.personal.checkpointwatch.ui.ReportUi
 import nz.personal.checkpointwatch.ui.TimeFormat
 import nz.personal.checkpointwatch.ui.home.BannerUi
+import nz.personal.checkpointwatch.ui.home.EmptyStateBuilder
 import nz.personal.checkpointwatch.ui.home.HomeUiState
 import nz.personal.checkpointwatch.ui.home.ListItem
 import nz.personal.checkpointwatch.ui.home.Summary
@@ -223,6 +224,8 @@ object SampleData {
         lastChecked: Instant? = minutesAgo(3),
         totalReports: Int = reports.size,
         firstEver: Boolean = false,
+        lastStatus: ScrapeStatus? = ScrapeStatus.OK,
+        pullRefreshing: Boolean = false,
     ) = HomeUiState(
         loading = false,
         items = items,
@@ -234,6 +237,13 @@ object SampleData {
         lastChecked = lastChecked,
         totalReports = totalReports,
         firstEver = firstEver,
+        emptyKind = EmptyStateBuilder.kind(
+            visibleItems = items.size,
+            totalReports = totalReports,
+            scanning = scanning,
+            lastStatus = lastStatus,
+        ),
+        pullRefreshing = pullRefreshing,
         now = now,
     )
 
@@ -242,6 +252,15 @@ object SampleData {
 
     /** Mid-scan, with saved reports already on screen. */
     val scanning: HomeUiState = state(items, summary, BannerUi.Message("Finding checkpoints…"), scanning = true)
+
+    /** Mid-scan because the owner pulled the list down: the one case with a refresh indicator. */
+    val pullRefreshing: HomeUiState = state(
+        items = items,
+        summary = summary,
+        banner = BannerUi.Message("Finding checkpoints…"),
+        scanning = true,
+        pullRefreshing = true,
+    )
 
     /** Nothing reported in the last two hours; the list below still has history in it. */
     val quiet: HomeUiState = state(
@@ -260,6 +279,7 @@ object SampleData {
         lastChecked = null,
         totalReports = 0,
         firstEver = true,
+        lastStatus = null,
     )
 
     /** First run, but the phone could not reach Facebook. */
@@ -269,6 +289,27 @@ object SampleData {
         banner = BannerUi.Message("Couldn't reach Facebook · showing saved reports"),
         totalReports = 0,
         firstEver = false,
+        lastStatus = ScrapeStatus.FAILED_NETWORK,
+    )
+
+    /** The page was reached and served nothing. Not the same thing as being offline. */
+    val noPosts: HomeUiState = state(
+        items = emptyList(),
+        summary = Summary(emptyMap(), null),
+        banner = BannerUi.Message("Facebook returned no posts · showing saved reports"),
+        totalReports = 0,
+        firstEver = false,
+        lastStatus = ScrapeStatus.FAILED_NO_DATA,
+    )
+
+    /** A scan that worked perfectly and found nothing worth keeping. */
+    val nothingYet: HomeUiState = state(
+        items = emptyList(),
+        summary = Summary(emptyMap(), null),
+        banner = BannerUi.Message("No new reports"),
+        totalReports = 0,
+        firstEver = false,
+        lastStatus = ScrapeStatus.OK,
     )
 
     /** Filters that nothing matches, with reports saved behind them. */
