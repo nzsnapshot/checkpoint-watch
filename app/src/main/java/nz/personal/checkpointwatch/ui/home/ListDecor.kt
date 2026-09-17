@@ -43,7 +43,8 @@ fun DayHeader(label: String, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
-            .padding(top = 16.dp, bottom = 8.dp, start = 4.dp),
+            // CARD_GAP above this is 8; together with 16 that is the 24 a new day gets.
+            .padding(top = 16.dp, bottom = 4.dp, start = 4.dp),
     )
 }
 
@@ -58,7 +59,7 @@ fun GapDivider(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 18.dp),
+            .padding(vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

@@ -4,11 +4,11 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.Density
@@ -115,12 +115,31 @@ class ScreenshotTest {
         capture("home_dark_scanning.png")
     }
 
-    /** Expansion is internal `rememberSaveable` state in [ReportCard][nz.personal.checkpointwatch.ui.home.ReportCard]; drive it with a real click. */
+    /**
+     * Expansion is internal `rememberSaveable` state in
+     * [ReportCard][nz.personal.checkpointwatch.ui.home.ReportCard]; drive it with a real click.
+     *
+     * Opened on the Pakuranga Road crash, which shares its post with a second report — the case
+     * where the full post genuinely adds something the card does not already show, so the expanded
+     * section renders in full rather than collapsing to just the source and the link.
+     */
     @Test
     fun home_dark_expanded() {
+        // The multi-report post on its own, so the opened card is on screen whole rather than
+        // being scrolled to — a LazyColumn disposes what it scrolls past, taking the opened
+        // card's content with it.
+        setHome(SampleData.multiReport, dark = true)
+        // Both reports in that post are on Pakuranga Road; the crash is the first of the two.
+        composeTestRule.onAllNodesWithText("Pakuranga Road", substring = true)[0].performClick()
+        capture("home_dark_expanded.png")
+    }
+
+    /** The other half of that decision: a single-report post, where the card already said it all. */
+    @Test
+    fun home_dark_expanded_plain() {
         setHome(SampleData.home, dark = true)
         composeTestRule.onNodeWithText("Lincoln Road", substring = true).performClick()
-        capture("home_dark_expanded.png")
+        capture("home_dark_expanded_plain.png")
     }
 
     @Test
@@ -155,17 +174,38 @@ class ScreenshotTest {
     }
 
     /**
-     * Scrolls past the summary/banner/filter header and the fresher reports so the sticky "Today"
-     * day header, the history [gap divider][nz.personal.checkpointwatch.ui.home.ListItem.Gap] and
-     * an old report (`Trig Road`) are all on screen together. Index 11 is the `Trig Road` report
-     * in the LazyColumn: 0=summary, 1=banner, 2=filters, 3=day header, 4..9=the six reports before
-     * the gap, 10=gap, 11=Trig Road.
+     * Scrolls deep into the list so three things are on screen at once: the pinned filter bar and
+     * collapsed title at the top, the sticky "Today" day header, and the history
+     * [gap divider][nz.personal.checkpointwatch.ui.home.ListItem.Gap] with an old report after it.
+     *
+     * The filter row is no longer a list item, so the indices are 0=summary, 1=banner,
+     * 2=day header, 3..8=the six reports before the gap, 9=gap, 10=Trig Road.
      */
     @Test
     fun home_dark_scrolled() {
         setHome(SampleData.home, dark = true)
-        composeTestRule.onNode(hasScrollToIndexAction()).performScrollToIndex(11)
+        scrollDeep()
         capture("home_dark_scrolled.png")
+    }
+
+    /** The same, in light, where the cards and tiles have to earn their edge from a hairline. */
+    @Test
+    fun home_light_scrolled() {
+        setHome(SampleData.home, dark = false)
+        scrollDeep()
+        capture("home_light_scrolled.png")
+    }
+
+    /**
+     * Scrolls with real drags rather than `performScrollToIndex`, which moves the list without ever
+     * touching the nested-scroll chain — so the collapsing app bar would stay fully expanded and
+     * the capture would not show the thing it exists to show.
+     */
+    private fun scrollDeep(drags: Int = 4) {
+        repeat(drags) {
+            composeTestRule.onNode(hasScrollToIndexAction()).performTouchInput { swipeUp() }
+            composeTestRule.waitForIdle()
+        }
     }
 
     // ---- Settings ----

@@ -1,8 +1,10 @@
 package nz.personal.checkpointwatch.ui.home
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
@@ -14,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
@@ -36,6 +39,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -48,11 +54,21 @@ import kotlinx.coroutines.launch
 import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.ui.CwIcons
+import kotlin.math.roundToInt
 
 /** Wide screens get a reading column rather than a 1200 px line of text. */
 private val MAX_CONTENT_WIDTH = 640.dp
 
 private val GUTTER = 16.dp
+
+/** Vertical rhythm, on a 4 dp grid: between cards, between sections, above a day heading. */
+private val CARD_GAP = 8.dp
+private val SECTION_GAP = 16.dp
+internal val DAY_HEADER_GAP = 24.dp
+
+/** Room the subtitle needs in the expanded bar, and how fast it gets out of the way. */
+private val SUBTITLE_HEADROOM = 24.dp
+private const val SUBTITLE_FADE_RATE = 2.5f
 
 /**
  * Everything the home screen can be asked to do. One immutable holder rather than eight separate
@@ -99,21 +115,45 @@ fun HomeContent(
         containerColor = scheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            LargeTopAppBar(
-                title = { Text(stringResource(R.string.home_title)) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = scheme.background,
-                    scrolledContainerColor = scheme.surfaceContainer,
-                    titleContentColor = scheme.onSurface,
-                    actionIconContentColor = scheme.onSurfaceVariant,
-                ),
-                actions = {
-                    IconButton(onClick = callbacks.onOpenSettings) {
-                        Icon(CwIcons.Settings, contentDescription = stringResource(R.string.cd_settings))
-                    }
-                },
-                scrollBehavior = scrollBehavior,
+            // The filters live up here with the app bar rather than in the list. A LazyColumn pins
+            // only its most recent sticky header, so as a list item the filter row was unpinned by
+            // the first day heading and scrolled away; the day headings stay sticky in the list.
+            val scrolled = scrollBehavior.state.overlappedFraction > 0.01f
+            val barColour by animateColorAsState(
+                targetValue = if (scrolled) scheme.surfaceContainer else scheme.background,
+                label = "top-bar-colour",
             )
+            Column(modifier = Modifier.background(barColour)) {
+                LargeTopAppBar(
+                    title = { HomeTitle(collapsedFraction = scrollBehavior.state.collapsedFraction) },
+                    expandedHeight = TopAppBarDefaults.LargeAppBarExpandedHeight + SUBTITLE_HEADROOM,
+                    // The Column above paints the container, so the bar itself must not, or the two
+                    // would cross-fade against each other as the list scrolls under them.
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = Color.Transparent,
+                        titleContentColor = scheme.onSurface,
+                        actionIconContentColor = scheme.onSurfaceVariant,
+                    ),
+                    actions = {
+                        IconButton(onClick = callbacks.onOpenSettings) {
+                            Icon(CwIcons.Settings, contentDescription = stringResource(R.string.cd_settings))
+                        }
+                    },
+                    scrollBehavior = scrollBehavior,
+                )
+                FilterBar(
+                    hiddenTypes = state.settings.hiddenTypes,
+                    suburbs = state.suburbs,
+                    suburbFilter = state.settings.suburbFilter,
+                    onToggleType = callbacks.onToggleType,
+                    onSetSuburb = callbacks.onSetSuburb,
+                )
+                // A hairline, and only once something is actually underneath it.
+                HorizontalDivider(
+                    color = if (scrolled) scheme.outlineVariant else Color.Transparent,
+                )
+            }
         },
     ) { innerPadding ->
         val direction = LocalLayoutDirection.current
@@ -149,6 +189,32 @@ fun HomeContent(
     }
 }
 
+/**
+ * The app's name, with a quiet line under it saying what it is actually looking at. The subtitle
+ * fades *and* gives its height back as the bar collapses, so the collapsed bar is a single
+ * correctly-centred line rather than one line floating above an invisible second.
+ */
+@Composable
+private fun HomeTitle(collapsedFraction: Float) {
+    val visible = ((1f - collapsedFraction) * SUBTITLE_FADE_RATE).coerceIn(0f, 1f)
+    Column {
+        Text(stringResource(R.string.home_title))
+        Text(
+            text = stringResource(R.string.home_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier
+                .graphicsLayer { alpha = visible }
+                .layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints)
+                    val height = (placeable.height * visible).roundToInt()
+                    layout(placeable.width, height) { placeable.place(0, 0) }
+                },
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ReportList(
@@ -161,8 +227,8 @@ private fun ReportList(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 4.dp, bottom = bottomInset + 32.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(top = SECTION_GAP, bottom = bottomInset + 32.dp),
+        verticalArrangement = Arrangement.spacedBy(CARD_GAP),
     ) {
         item(key = "summary", contentType = "summary") {
             PageWidth(Modifier.animateItem()) {
@@ -177,24 +243,13 @@ private fun ReportList(
         }
 
         item(key = "banner", contentType = "banner") {
-            PageWidth(Modifier.animateItem()) {
+            // CARD_GAP + this = SECTION_GAP.
+            PageWidth(Modifier.animateItem().padding(top = SECTION_GAP - CARD_GAP)) {
                 StatusBanner(
                     banner = state.banner,
                     scanning = state.scanning,
                     lastChecked = state.lastChecked,
                     now = state.now,
-                )
-            }
-        }
-
-        stickyHeader(key = "filters", contentType = "filters") {
-            PageWidth(Modifier.background(MaterialTheme.colorScheme.background)) {
-                FilterBar(
-                    hiddenTypes = state.settings.hiddenTypes,
-                    suburbs = state.suburbs,
-                    suburbFilter = state.settings.suburbFilter,
-                    onToggleType = callbacks.onToggleType,
-                    onSetSuburb = callbacks.onSetSuburb,
                 )
             }
         }
@@ -213,8 +268,7 @@ private fun ReportList(
 
         // Emitted one by one rather than through items(), because a day header has to be a
         // stickyHeader: scrolling through yesterday should never leave you wondering which day
-        // you are looking at. Compose pins the most recent sticky header only, so a day heading
-        // takes over from the filter row as soon as you are into the list proper.
+        // you are looking at.
         state.items.forEach { item ->
             when (item) {
                 is ListItem.DayHeader -> stickyHeader(key = itemKey(item), contentType = "day") {

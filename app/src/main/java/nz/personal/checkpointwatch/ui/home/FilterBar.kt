@@ -1,6 +1,5 @@
 package nz.personal.checkpointwatch.ui.home
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,18 +15,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,11 +38,14 @@ import androidx.compose.ui.unit.dp
 import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.ui.CwIcons
-import nz.personal.checkpointwatch.ui.theme.chipOutline
-import nz.personal.checkpointwatch.ui.typeStyle
+import nz.personal.checkpointwatch.ui.ToneChip
+import nz.personal.checkpointwatch.ui.TypeChip
+
+/** The home screen's own gutter, repeated here because the bar spans the full width when pinned. */
+private val GUTTER = 16.dp
 
 /**
- * The row of filters, pinned under the summary: one chip per type and one for the area.
+ * The row of filters, pinned under the top bar: one chip per type and one for the area.
  *
  * Every chip carries its icon as well as its colour, so the row still reads correctly to someone
  * who cannot tell the red one from the orange one.
@@ -68,56 +65,25 @@ fun FilterBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.background)
             .horizontalScroll(rememberScrollState())
-            .padding(vertical = 4.dp),
+            .padding(horizontal = GUTTER, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ReportType.entries.forEach { type ->
-            val style = typeStyle(type)
-            val selected = type !in hiddenTypes
-            FilterChip(
-                selected = selected,
+            TypeChip(
+                type = type,
+                selected = type !in hiddenTypes,
                 onClick = { onToggleType(type) },
-                modifier = Modifier.minimumInteractiveComponentSize(),
-                // An unselected chip is nothing but its outline, so that outline has to carry 3:1
-                // the way any other control boundary does; `outline` is a divider colour.
-                border = FilterChipDefaults.filterChipBorder(
-                    enabled = true,
-                    selected = selected,
-                    borderColor = MaterialTheme.colorScheme.chipOutline,
-                ),
-                label = { Text(style.label) },
-                leadingIcon = {
-                    Icon(
-                        imageVector = style.icon,
-                        contentDescription = null,
-                        tint = if (selected) style.color else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
-                    )
-                },
             )
         }
-        AssistChip(
+        ToneChip(
+            label = suburbFilter ?: allAreas,
+            icon = CwIcons.Place,
+            // The owner's own choice rather than a category, so it carries the app's accent.
+            tone = MaterialTheme.colorScheme.primary,
+            selected = suburbFilter != null,
             onClick = { sheetOpen = true },
-            modifier = Modifier.minimumInteractiveComponentSize(),
-            border = AssistChipDefaults.assistChipBorder(
-                enabled = true,
-                borderColor = MaterialTheme.colorScheme.chipOutline,
-            ),
-            label = { Text(suburbFilter ?: allAreas) },
-            leadingIcon = {
-                Icon(
-                    imageVector = CwIcons.Place,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-            },
-            colors = AssistChipDefaults.assistChipColors(
-                labelColor = MaterialTheme.colorScheme.onSurface,
-                leadingIconContentColor = MaterialTheme.colorScheme.primary,
-            ),
         )
     }
 

@@ -5,6 +5,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,6 +52,7 @@ import nz.personal.checkpointwatch.ui.CwIcons
 import nz.personal.checkpointwatch.ui.Freshness
 import nz.personal.checkpointwatch.ui.ReportUi
 import nz.personal.checkpointwatch.ui.TimeFormat
+import nz.personal.checkpointwatch.ui.theme.isDarkScheme
 import nz.personal.checkpointwatch.ui.typeLabel
 import nz.personal.checkpointwatch.ui.typeStyle
 import java.time.Instant
@@ -110,7 +112,10 @@ fun ReportCard(
         clock,
         ago,
     )
-    val description = cardSentence(report, label, ago, expanded)
+    // Nowhere to name: no road, no suburb. The label is all the heading there is.
+    val headline = report.road == null && report.suburb == null
+    val postAddsDetail = remember(report) { PostDetail.postAddsDetail(report) }
+    val description = cardSentence(report, label, ago, expanded && postAddsDetail)
     val expandLabel = stringResource(R.string.card_expand)
     val collapseLabel = stringResource(R.string.card_collapse)
     val stateText = stringResource(
@@ -122,6 +127,12 @@ fun ReportCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .background(scheme.surface)
+            // White on near-white needs an edge; in dark the card is already lighter than the page.
+            .border(
+                width = 1.dp,
+                color = if (scheme.isDarkScheme) Color.Transparent else scheme.outlineVariant,
+                shape = RoundedCornerShape(18.dp),
+            )
             .drawBehind {
                 // The start edge, not the left one: in an RTL layout the rail belongs on the right.
                 val rail = RAIL_WIDTH.toPx()
@@ -152,7 +163,7 @@ fun ReportCard(
                 ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Header(report = report, label = label, expanded = expanded)
+            Header(report = report, label = label)
 
             Column(
                 modifier = Modifier.alpha(bodyAlpha),
@@ -161,18 +172,21 @@ fun ReportCard(
                 if (report.details.isNotBlank()) {
                     Text(
                         text = report.details,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = bodyColour,
+                        // With no road to be the hero, the details are the hero: a headerless post
+                        // showing "Update" twice and its actual content in grey was the wrong way
+                        // round.
+                        style = if (headline) {
+                            MaterialTheme.typography.bodyLarge
+                        } else {
+                            MaterialTheme.typography.bodyMedium
+                        },
+                        color = if (headline) scheme.onSurface else bodyColour,
                         maxLines = if (expanded) Int.MAX_VALUE else COLLAPSED_DETAIL_LINES,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
 
-                Text(
-                    text = meta,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = bodyColour,
-                )
+                MetaRow(text = meta, colour = bodyColour, expanded = expanded)
 
                 if (report.alsoInArea.isNotEmpty()) {
                     AlsoInArea(
@@ -186,19 +200,18 @@ fun ReportCard(
 
             // Opened deliberately, so shown at full strength however old the report is.
             if (expanded) {
-                ExpandedDetail(report = report, onOpenPost = onOpenPost)
+                ExpandedDetail(report = report, showPost = postAddsDetail, onOpenPost = onOpenPost)
             }
         }
     }
 }
 
 @Composable
-private fun Header(report: ReportUi, label: String, expanded: Boolean) {
+private fun Header(report: ReportUi, label: String) {
     val style = typeStyle(report.type)
     val scheme = MaterialTheme.colorScheme
-    val title = report.road ?: report.suburb ?: label
+    val title = report.road ?: report.suburb
     val overlineSuburb = report.suburb?.takeIf { report.road != null }
-    val chevronTurn by animateFloatAsState(if (expanded) 180f else 0f, label = "chevron")
 
     Row(
         verticalAlignment = Alignment.Top,
@@ -241,37 +254,62 @@ private fun Header(report: ReportUi, label: String, expanded: Boolean) {
                     )
                 }
             }
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                // Past six hours the road name greys off rather than fades, so it keeps its
-                // contrast while still reading as history.
-                color = if (report.freshness == Freshness.OLD) scheme.onSurfaceVariant else scheme.onSurface,
-            )
-        }
-        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (report.isNew) {
-                Pill(
-                    text = stringResource(R.string.card_new),
-                    background = scheme.primary,
-                    foreground = scheme.onPrimary,
-                )
-            } else if (report.freshness == Freshness.OLD) {
-                Pill(
-                    text = stringResource(R.string.card_old),
-                    background = scheme.surfaceContainerHigh,
-                    foreground = scheme.onSurfaceVariant,
+            if (title != null) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    // Past six hours the road name greys off rather than fades, so it keeps its
+                    // contrast while still reading as history.
+                    color = if (report.freshness == Freshness.OLD) scheme.onSurfaceVariant else scheme.onSurface,
                 )
             }
-            Icon(
-                imageVector = CwIcons.ChevronDown,
-                contentDescription = null,
-                tint = scheme.onSurfaceVariant,
-                modifier = Modifier
-                    .size(18.dp)
-                    .rotate(chevronTurn),
+        }
+        if (report.isNew) {
+            // In light the amber has to be dark enough to hold white text, which reads brown on a
+            // white card; the container pair is the same accent the right way round.
+            Pill(
+                text = stringResource(R.string.card_new),
+                background = if (scheme.isDarkScheme) scheme.primary else scheme.primaryContainer,
+                foreground = if (scheme.isDarkScheme) scheme.onPrimary else scheme.onPrimaryContainer,
+            )
+        } else if (report.freshness == Freshness.OLD) {
+            Pill(
+                text = stringResource(R.string.card_old),
+                background = scheme.surfaceContainerHigh,
+                foreground = scheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/**
+ * "Reported 8:55 pm · 5 min ago" with the open/close chevron at the far end of the same line.
+ * Stacked under the NEW pill in the corner it read as a stray mark; on the baseline of the line it
+ * belongs to, it reads as the control it is. The card is the touch target, so the chevron itself
+ * stays decorative.
+ */
+@Composable
+private fun MetaRow(text: String, colour: Color, expanded: Boolean) {
+    val chevronTurn by animateFloatAsState(if (expanded) 180f else 0f, label = "chevron")
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = colour,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            imageVector = CwIcons.ChevronDown,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .padding(start = 8.dp)
+                .size(18.dp)
+                .rotate(chevronTurn),
+        )
     }
 }
 

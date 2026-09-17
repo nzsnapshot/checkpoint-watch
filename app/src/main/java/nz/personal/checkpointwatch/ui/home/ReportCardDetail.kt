@@ -3,6 +3,7 @@ package nz.personal.checkpointwatch.ui.home
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -75,20 +76,24 @@ internal fun AlsoInArea(where: String, mentions: List<AreaMention>, now: Instant
 }
 
 @Composable
-internal fun ExpandedDetail(report: ReportUi, onOpenPost: (String) -> Unit) {
+internal fun ExpandedDetail(report: ReportUi, showPost: Boolean, onOpenPost: (String) -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         HorizontalDivider(color = scheme.outlineVariant)
-        Text(
-            text = stringResource(R.string.card_full_post),
-            style = MaterialTheme.typography.labelSmall,
-            color = scheme.onSurfaceVariant,
-        )
-        Text(
-            text = report.postText,
-            style = MaterialTheme.typography.bodyMedium,
-            color = scheme.onSurface,
-        )
+        // Most posts are the card with emoji on them; the full text is only worth the space when
+        // it carries something the card does not — a second report, or a line the parser dropped.
+        if (showPost) {
+            Text(
+                text = stringResource(R.string.card_full_post),
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+            )
+            Text(
+                text = report.postText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurface,
+            )
+        }
         report.source?.takeIf { it.isNotBlank() }?.let { source ->
             Text(
                 text = stringResource(R.string.card_source, source),
@@ -99,6 +104,9 @@ internal fun ExpandedDetail(report: ReportUi, onOpenPost: (String) -> Unit) {
         TextButton(
             onClick = { onOpenPost(report.postUrl) },
             modifier = Modifier.minimumInteractiveComponentSize(),
+            // Flush with the card's own text column; a button's default inset left it floating
+            // a few dp to the right of everything above it.
+            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp),
         ) {
             Text(stringResource(R.string.card_open_facebook))
             Icon(

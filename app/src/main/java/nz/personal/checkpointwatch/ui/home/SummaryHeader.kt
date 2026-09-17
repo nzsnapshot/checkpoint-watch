@@ -39,6 +39,7 @@ import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.ui.CwIcons
 import nz.personal.checkpointwatch.ui.TimeFormat
+import nz.personal.checkpointwatch.ui.theme.isDarkScheme
 import nz.personal.checkpointwatch.ui.typeStyle
 import java.time.Instant
 
@@ -181,15 +182,25 @@ private fun SummaryTile(
     }
     val placeholder = stringResource(R.string.summary_placeholder)
 
+    // A dark tile earns its edge by being lighter than the background; a light one cannot, because
+    // the container and the page are both near-white, so it earns it from a hairline instead.
+    val dark = scheme.isDarkScheme
+    val tileColour = when {
+        solo -> style.container
+        dark -> scheme.surfaceContainerLow
+        else -> scheme.surface
+    }
+    val tileBorder = when {
+        solo -> style.color
+        dark -> Color.Transparent
+        else -> scheme.outlineVariant
+    }
+
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
-            .background(if (solo) style.container else scheme.surfaceContainerLow)
-            .border(
-                width = 1.dp,
-                color = if (solo) style.color else Color.Transparent,
-                shape = RoundedCornerShape(16.dp),
-            )
+            .background(tileColour)
+            .border(width = 1.dp, color = tileBorder, shape = RoundedCornerShape(16.dp))
             // A button that says what it will do, rather than a tab that leaves the owner to guess.
             .clickable(onClickLabel = action, role = Role.Button, onClick = onClick)
             // One spoken sentence per tile: the icon, the number and the label separately would be
