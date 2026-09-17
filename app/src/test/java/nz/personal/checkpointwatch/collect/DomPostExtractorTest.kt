@@ -1,5 +1,6 @@
 package nz.personal.checkpointwatch.collect
 
+import nz.personal.checkpointwatch.Constants
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -115,5 +116,65 @@ class DomPostExtractorTest {
         val b = DomPostExtractor.textHash("Checkpoint on King St")
 
         assertNotEquals(a, b)
+    }
+
+    @Test
+    fun extract_url_usesLinkWhenPresent() {
+        val posts = DomPostExtractor.extract(
+            listOf(DomPost("checkpoint on Queen St", "5m", "https://facebook.com/specific-post")),
+            scanTime,
+        )
+
+        assertEquals("https://facebook.com/specific-post", posts[0].url)
+    }
+
+    @Test
+    fun extract_url_fallsBackToPageUrlWhenLinkNull() {
+        val posts = DomPostExtractor.extract(
+            listOf(DomPost("checkpoint on Queen St", "5m", null)),
+            scanTime,
+        )
+
+        assertEquals(Constants.PAGE_URL, posts[0].url)
+    }
+
+    @Test
+    fun extract_age_caseInsensitive_hoursShortForm() {
+        val posts = DomPostExtractor.extract(
+            listOf(DomPost("checkpoint a", "2H", "https://facebook.com/x")),
+            scanTime,
+        )
+
+        assertEquals(scanTime.minus(2, ChronoUnit.HOURS), posts[0].createdAt)
+    }
+
+    @Test
+    fun extract_age_caseInsensitive_hoursLongForm() {
+        val posts = DomPostExtractor.extract(
+            listOf(DomPost("checkpoint b", "3 HRS", "https://facebook.com/x")),
+            scanTime,
+        )
+
+        assertEquals(scanTime.minus(3, ChronoUnit.HOURS), posts[0].createdAt)
+    }
+
+    @Test
+    fun extract_age_caseInsensitive_daysLongForm() {
+        val posts = DomPostExtractor.extract(
+            listOf(DomPost("checkpoint c", "2 DAYS", "https://facebook.com/x")),
+            scanTime,
+        )
+
+        assertEquals(scanTime.minus(2, ChronoUnit.DAYS), posts[0].createdAt)
+    }
+
+    @Test
+    fun extract_age_caseInsensitive_justNow() {
+        val posts = DomPostExtractor.extract(
+            listOf(DomPost("checkpoint d", "JUST NOW", "https://facebook.com/x")),
+            scanTime,
+        )
+
+        assertEquals(scanTime, posts[0].createdAt)
     }
 }

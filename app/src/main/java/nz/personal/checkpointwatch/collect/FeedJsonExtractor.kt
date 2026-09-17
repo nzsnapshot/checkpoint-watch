@@ -15,6 +15,13 @@ import java.time.Instant
  */
 object FeedJsonExtractor {
 
+    /**
+     * Recursion cap for [walk], [findLongInSubtree] and [findMessageText]. Real Facebook
+     * payloads nest about 25 levels deep; 200 leaves generous headroom while guaranteeing we
+     * never stack-overflow walking a deeply nested or maliciously crafted document.
+     */
+    private const val MAX_DEPTH = 200
+
     private val json = Json { ignoreUnknownKeys = true }
     private val forLoopPrefix = Regex("""^\s*for\s*\(;;\);\s*""")
     private val scriptBlockPattern = Regex(
@@ -54,6 +61,11 @@ object FeedJsonExtractor {
     private fun tryParse(text: String): JsonElement? =
         try {
             json.parseToJsonElement(text)
+        } catch (_: StackOverflowError) {
+            // kotlinx's parser is itself recursive; a pathologically deep document can overflow
+            // the stack while parsing, before we ever get a JsonElement to walk. Treat that the
+            // same as any other malformed input: skip this chunk/line.
+            null
         } catch (_: Exception) {
             null
         }
@@ -64,18 +76,20 @@ object FeedJsonExtractor {
             .map { group -> group.maxBy { it.text.length } }
 
     /**
-     * Walks the parsed tree looking for objects with a string `post_id`. When such an object
-     * also has a `creation_time` and a `message.text` findable in its subtree, emits a post and
-     * does not descend further into it (avoiding the many nested duplicates Facebook embeds).
-     * Otherwise keeps descending.
+     * Walks the parsed tree looking for objects with a non-blank string `post_id`. When such an
+     * object also has a `creation_time` and a `message.text` findable in its subtree, emits a
+     * post and does not descend further into it (avoiding the many nested duplicates Facebook
+     * embeds). Otherwise keeps descending. Stops descending past [MAX_DEPTH] so a deeply nested
+     * or adversarial document can never overflow the stack.
      */
-    private fun walk(element: JsonElement, out: MutableList<RawPost>) {
+    private fun walk(element: JsonElement, out: MutableList<RawPost>, depth: Int = 0) {
+        if (depth > MAX_DEPTH) return
         when (element) {
             is JsonObject -> {
                 val postId = element.stringField("post_id")
                 if (postId != null) {
-                    val creationTime = findCreationTime(element)
-                    val text = findMessageText(element)
+                    val creationTime = findCreationTime(element, depth)
+                    val text = findMessageText(element, depth)
                     if (creationTime != null && !text.isNullOrBlank()) {
                         out.add(
                             RawPost(
@@ -89,21 +103,23 @@ object FeedJsonExtractor {
                         return
                     }
                 }
-                element.values.forEach { walk(it, out) }
+                element.values.forEach { walk(it, out, depth + 1) }
             }
-            is JsonArray -> element.forEach { walk(it, out) }
+            is JsonArray -> element.forEach { walk(it, out, depth + 1) }
             else -> Unit
         }
     }
 
     private fun JsonObject.stringField(key: String): String? =
-        (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
 
     /** `creation_time` directly on [element], else the first one found anywhere in its subtree. */
-    private fun findCreationTime(element: JsonObject): Long? =
-        (element["creation_time"] as? JsonPrimitive)?.longOrNull ?: findLongInSubtree(element, "creation_time")
+    private fun findCreationTime(element: JsonObject, depth: Int): Long? =
+        (element["creation_time"] as? JsonPrimitive)?.longOrNull
+            ?: findLongInSubtree(element, "creation_time", depth)
 
-    private fun findLongInSubtree(element: JsonElement, key: String): Long? {
+    private fun findLongInSubtree(element: JsonElement, key: String, depth: Int): Long? {
+        if (depth > MAX_DEPTH) return null
         when (element) {
             is JsonObject -> {
                 for ((k, v) in element) {
@@ -111,13 +127,13 @@ object FeedJsonExtractor {
                         val direct = (v as? JsonPrimitive)?.longOrNull
                         if (direct != null) return direct
                     }
-                    val nested = findLongInSubtree(v, key)
+                    val nested = findLongInSubtree(v, key, depth + 1)
                     if (nested != null) return nested
                 }
             }
             is JsonArray -> {
                 for (item in element) {
-                    val nested = findLongInSubtree(item, key)
+                    val nested = findLongInSubtree(item, key, depth + 1)
                     if (nested != null) return nested
                 }
             }
@@ -127,7 +143,8 @@ object FeedJsonExtractor {
     }
 
     /** First `message.text` found by pre-order, key-order DFS anywhere in [element]'s subtree. */
-    private fun findMessageText(element: JsonElement): String? {
+    private fun findMessageText(element: JsonElement, depth: Int): String? {
+        if (depth > MAX_DEPTH) return null
         when (element) {
             is JsonObject -> {
                 for ((key, value) in element) {
@@ -135,13 +152,13 @@ object FeedJsonExtractor {
                         val text = (value["text"] as? JsonPrimitive)?.takeIf { it.isString }?.content
                         if (text != null) return text
                     }
-                    val nested = findMessageText(value)
+                    val nested = findMessageText(value, depth + 1)
                     if (nested != null) return nested
                 }
             }
             is JsonArray -> {
                 for (item in element) {
-                    val nested = findMessageText(item)
+                    val nested = findMessageText(item, depth + 1)
                     if (nested != null) return nested
                 }
             }

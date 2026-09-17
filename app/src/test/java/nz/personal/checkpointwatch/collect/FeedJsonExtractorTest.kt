@@ -128,4 +128,38 @@ class FeedJsonExtractorTest {
 
         assertEquals(Instant.ofEpochSecond(1789646506L), posts[0].createdAt)
     }
+
+    @Test
+    fun extract_postNestedAtRealisticDepth_isStillFound() {
+        // Real Facebook payloads nest the post object about 25 levels deep under wrapper keys.
+        val depth = 30
+        val core = """{"post_id":"1","creation_time":1000,"message":{"text":"deep post"}}"""
+        val chunk = "{\"a\":".repeat(depth) + core + "}".repeat(depth)
+
+        val posts = FeedJsonExtractor.extract(listOf(chunk))
+
+        assertEquals(listOf("1"), posts.map { it.postId })
+        assertEquals("deep post", posts[0].text)
+    }
+
+    @Test
+    fun extract_pathologicallyDeepJson_returnsWithoutThrowing() {
+        // 50,000 nested arrays: deep enough to overflow the stack either while kotlinx parses it
+        // or while we walk it, if not guarded. extract() must never let that propagate.
+        val depth = 50_000
+        val chunk = "[".repeat(depth) + "1" + "]".repeat(depth)
+
+        val posts = FeedJsonExtractor.extract(listOf(chunk))
+
+        assertTrue(posts.isEmpty())
+    }
+
+    @Test
+    fun extract_blankPostId_treatedAsAbsent() {
+        val chunk = """{"data":{"node":{"post_id":"","creation_time":1000,"message":{"text":"nope"}}}}"""
+
+        val posts = FeedJsonExtractor.extract(listOf(chunk))
+
+        assertTrue(posts.isEmpty())
+    }
 }
