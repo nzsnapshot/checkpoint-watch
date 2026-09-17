@@ -1,5 +1,6 @@
 package nz.personal.checkpointwatch.ui.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,7 @@ import nz.personal.checkpointwatch.Constants
 import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.ui.CwIcons
 import nz.personal.checkpointwatch.ui.TimeFormat
+import nz.personal.checkpointwatch.ui.theme.isDarkScheme
 
 @Composable
 internal fun HistorySection(state: SettingsUiState) {
@@ -160,7 +162,10 @@ internal fun Section(
         }
         Surface(
             shape = RoundedCornerShape(20.dp),
-            color = scheme.surfaceContainerLow,
+            // In light the card and the page are both near-white, so the card earns its edge from
+            // a hairline; in dark it is already lighter than the page behind it.
+            color = if (scheme.isDarkScheme) scheme.surfaceContainerLow else scheme.surface,
+            border = if (scheme.isDarkScheme) null else BorderStroke(1.dp, scheme.outlineVariant),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
