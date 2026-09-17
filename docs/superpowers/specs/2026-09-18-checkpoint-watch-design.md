@@ -67,7 +67,7 @@ These were measured against the live page and drive the design.
 - `compileSdk`/`targetSdk` 36, `minSdk` 29. Single `app` module.
 - Build from the command line with the Gradle wrapper (Gradle 9.3.1 is already
   cached on the dev machine; JDK 17; SDK platform 36 / build-tools 36.0.0).
-- Only permission: `android.permission.INTERNET`.
+- Permissions: `INTERNET`; plus those listed under Background updates.
 - Application ID `nz.personal.checkpointwatch`, app label "Checkpoint Watch".
 
 ## Architecture
@@ -205,7 +205,7 @@ post_revisions(id PK, post_id FK, text TEXT, replaced_at INTEGER)
 scrapes(
   id INTEGER PK AUTOINCREMENT, started_at, finished_at,
   status TEXT,                      -- OK, OK_WITH_GAP, FAILED_NETWORK, FAILED_NO_DATA, CANCELLED
-  end_reason TEXT, used_fallback INTEGER(0/1),
+  end_reason TEXT, trigger TEXT, collector TEXT,
   posts_seen INTEGER, posts_new INTEGER, posts_updated INTEGER
 )
 scrape_sightings(scrape_id FK, post_id FK, PRIMARY KEY(scrape_id, post_id))
@@ -265,6 +265,58 @@ Single screen, Material 3, follows system light/dark.
   button (opens the default browser; user-initiated only).
 - List is grouped by day (Today / Yesterday / date) in `Pacific/Auckland`.
 
+## Background updates (optional, off by default)
+
+The owner wants the option to stay up to date without opening the app.
+
+- **Setting:** "Update in background" — Off / every 15 min / 30 min / 1 h /
+  2 h. Because a scan sees ~4 h of posts, any of these intervals keeps the
+  history gap-free under normal posting rates. Stored in DataStore.
+- **Scheduler:** WorkManager unique periodic work (`KEEP`/`UPDATE` on setting
+  change), constraint `NetworkType.CONNECTED`. WorkManager has no Google
+  services dependency and survives reboot. Android may delay runs under Doze;
+  the settings screen explains this and offers a button that opens the
+  system battery page so the owner can set the app to "Unrestricted" (the
+  app does not request the exemption itself). 15 min is the platform minimum.
+- **Worker:** `ScanWorker` (CoroutineWorker) runs the same
+  `FeedCollector → FeedJsonExtractor → ScrapeRecorder` pipeline. A process-wide
+  mutex guarantees one scan at a time (foreground scan wins; the worker
+  returns `success` without scanning if one is running or finished < 2 min
+  ago).
+- **Headless WebView host:** with no Activity there is no window to attach
+  to. `FeedCollector` takes a `WebViewHost`: `ActivityHost` (attached behind
+  the UI, as above) or `HeadlessHost`, which creates the WebView on the main
+  thread with the application context, forces `measure`/`layout` to
+  1280×2400, and dispatches window-visibility VISIBLE so the page believes it
+  is shown. No overlay permission, nothing on screen.
+- **Known risk (unverified until run on the phone):** Chromium may throttle
+  an unattached WebView so Facebook's lazy loading yields fewer than 10
+  posts. Mitigation, in order: (1) the headless host above; (2) if the
+  WebView scan yields nothing, `HttpLatestFetcher` does the plain HTTPS GET
+  verified in the spike (desktop user agent → newest post embedded in HTML)
+  and feeds it through the same extractor, so a background run always
+  captures at least the newest post; (3) the next foreground open does a full
+  scan and the gap rule reports honestly if anything was missed.
+  The scrape row records `trigger` (FOREGROUND/BACKGROUND) and `collector`
+  (WEBVIEW/WEBVIEW_DOM/HTTP) so this is measurable on the device.
+- **Notifications (optional, off by default):** "Notify me about new
+  reports". Requests `POST_NOTIFICATIONS` only when switched on. After a
+  background scan with new reports, posts one grouped notification per scan
+  ("2 new: Checkpoint – Lincoln Road, HENDERSON · Crash – Pakuranga Road"),
+  limited to the types and watched suburbs chosen in settings (default: all).
+  Tapping opens the app. Foreground scans never notify. Reports older than
+  2 h at scan time never notify.
+- **Settings screen:** background interval, battery-settings shortcut,
+  notifications toggle, notify types, watched suburbs, last 10 scans log
+  (time, trigger, collector, new/seen, status) for transparency, and
+  "About / data source".
+
+`scrapes` gains two columns: `trigger TEXT`, `collector TEXT`
+(replacing `used_fallback`).
+
+Additional permissions: `POST_NOTIFICATIONS` (runtime, only if enabled),
+`RECEIVE_BOOT_COMPLETED` and `WAKE_LOCK` (merged in by WorkManager).
+
 ## Design quality bar
 
 The owner asked for a product that feels premium, not a utility scraper. The
@@ -307,7 +359,7 @@ UI is held to these rules:
 | Situation | Behaviour |
 |---|---|
 | No network / page load error | status `FAILED_NETWORK`, banner, saved data shown |
-| Page loads but no posts from JSON | use DOM fallback, `used_fallback = 1` |
+| Page loads but no posts from JSON | use DOM fallback, `collector = WEBVIEW_DOM` |
 | Neither yields posts | `FAILED_NO_DATA`, banner |
 | Hard login wall before any post | same as above |
 | Scan exceeds 45 s | keep whatever was captured, record normally |
@@ -328,13 +380,17 @@ UI is held to these rules:
   - `DomPostExtractor` — age parsing, stable IDs.
   - `ScrapeRecorder` — new/seen/edited posts, JSON↔DOM bridging, gap rule,
     zero posts, with in-memory fake DAOs.
+  - `NotificationPlanner` — type/suburb filtering, 2 h cut-off, grouping text.
+  - `HttpLatestFetcher` parsing path — via the captured HTML fixture.
 - Build verification: `./gradlew testDebugUnitTest assembleDebug`.
 - On-device verification (needs the phone over USB or an emulator; none is
   attached/installed today): scan finds ~10 posts, Facebook never visible,
-  leaving the app cancels the scan, second scan reports "No new reports".
+  leaving the app cancels the scan, second scan reports "No new reports";
+  background run with the app closed records a scrape row, and which
+  collector it needed.
 
 ## Out of scope
 
-Background/scheduled scanning, notifications, maps/geocoding, comments and
+Maps/geocoding, exact-time alarms or foreground services, comments and
 reactions, photos, other Facebook pages, logging in, export/backup, release
 signing beyond a debug-signed APK.
