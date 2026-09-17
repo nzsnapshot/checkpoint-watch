@@ -1,7 +1,6 @@
 package nz.personal.checkpointwatch.collect
 
 import nz.personal.checkpointwatch.Constants
-import nz.personal.checkpointwatch.parse.ReportParser
 import java.net.URI
 import java.security.MessageDigest
 import java.time.Duration
@@ -22,7 +21,33 @@ object DomPostExtractor {
 
     /** Lines Facebook draws under every post, which are not part of what was posted. */
     private val CHROME_LINES = setOf(
-        "like", "comment", "share", "all reactions", "all reactions:", "see more", "see less", "·",
+        "like", "comment", "share", "all reactions", "all reactions:", "see more", "see less",
+    )
+
+    /** Lines Facebook draws *above* every post: who posted, when, and how they are followed. */
+    private val HEADER_CHROME_LINES = setOf(
+        "online status indicator",
+        "active",
+        "follow",
+        "following",
+        "verified account",
+        "shared with public",
+        Constants.PAGE_NAME.lowercase(),
+    )
+
+    /** A separator Facebook puts between the page name and the age. */
+    private val SEPARATOR_LINES = setOf("·", "•")
+
+    /**
+     * The whole line is a relative age: "22m", "3 hrs ago", "Just now". Deliberately the same
+     * grammar [parseAgeMinutes] understands (and the same the collector script uses to find the
+     * age link), so a line is only ever treated as a timestamp if it really is one — "2 lanes"
+     * is not an age, and is not stripped.
+     */
+    private val AGE_LINE = Regex(
+        """^(just now|\d+\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|""" +
+            """hours|d|day|days|w|wk|wks|week|weeks|y|yr|yrs|year|years)(\s+ago)?)$""",
+        RegexOption.IGNORE_CASE,
     )
 
     /** A bare reaction or comment count: "8", "1.2K". */
@@ -55,26 +80,40 @@ object DomPostExtractor {
      * reads as a new one every time (a duplicate row, and a notification for it), and the hash can
      * never bridge onto the same post's `message.text` from the JSON feed.
      *
-     * Two cuts, both conservative:
-     *  - everything before the first header line (the shape [ReportParser] looks for) is dropped,
-     *    because the post proper starts there;
-     *  - trailing chrome lines are dropped from the end.
+     * Both cuts are made line by line, from the outside in, and stop at the first line that is not
+     * recognisably chrome:
+     *  - from the top: the online-status lines, the page's own name, the relative age, separators;
+     *  - from the bottom: reaction counts, "See more", the Like/Comment/Share row.
      *
-     * A post with no header line keeps its text from the top: better a little noise than a post
-     * thrown away. If the cuts would leave nothing at all, the original text is returned unchanged.
+     * Nothing is dropped for being *before the post's first report header*. The author may write a
+     * line or two before it — `ReportParser` deliberately keeps that as the first report's details
+     * — and deleting it here would give the DOM copy of a post a different hash from the JSON copy,
+     * which is exactly what stops the two ever bridging. A headerless post is cleaned the same way
+     * as any other, which matters most of all for those: with no header to anchor on, the age line
+     * is otherwise the thing that changes the post's identity every single scan.
+     *
+     * If the cuts would leave nothing at all, the original text is returned unchanged.
      */
     fun cleanText(text: String): String {
         val lines = text.lines().map { it.trimEnd() }
-        val start = lines.indexOfFirst { ReportParser.isHeaderLine(it) }.coerceAtLeast(0)
+        var start = 0
+        while (start < lines.size && isHeaderChrome(lines[start])) start++
         var end = lines.size
-        while (end > start && isChrome(lines[end - 1])) end--
+        while (end > start && isFooterChrome(lines[end - 1])) end--
         val kept = lines.subList(start, end).joinToString("\n").trim()
         return kept.ifEmpty { text.trim() }
     }
 
-    private fun isChrome(line: String): Boolean {
+    /** Only an entire line that is exactly one of these: "Active checkpoint on…" is a post. */
+    private fun isHeaderChrome(line: String): Boolean {
         val trimmed = line.trim()
-        if (trimmed.isEmpty()) return true
+        if (trimmed.isEmpty() || trimmed in SEPARATOR_LINES) return true
+        return trimmed.lowercase() in HEADER_CHROME_LINES || AGE_LINE.matches(trimmed)
+    }
+
+    private fun isFooterChrome(line: String): Boolean {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty() || trimmed in SEPARATOR_LINES) return true
         return trimmed.lowercase() in CHROME_LINES ||
             COUNT_LINE.matches(trimmed) ||
             COUNTED_LINE.matches(trimmed)

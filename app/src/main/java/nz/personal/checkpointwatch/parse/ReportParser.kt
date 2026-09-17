@@ -25,15 +25,6 @@ object ReportParser {
         var source: String? = null
     }
 
-    /**
-     * Whether a single line is a report header ("🛑 CHECKPOINT – Lincoln Road, HENDERSON").
-     *
-     * Exposed so the DOM fallback can find where a post's real text begins inside the chrome the
-     * page renders around it, using exactly the shape this parser recognises rather than a second
-     * copy of it.
-     */
-    fun isHeaderLine(line: String): Boolean = HEADER.matches(line.trim())
-
     fun parse(text: String, createdAt: Instant): List<ParsedReport> {
         val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
         if (lines.isEmpty()) return emptyList()

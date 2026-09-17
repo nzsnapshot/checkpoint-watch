@@ -211,10 +211,58 @@ class DomPostExtractorTest {
     }
 
     @Test
-    fun cleanText_leavesAHeaderlessPostAloneApartFromItsChrome() {
-        val cleaned = DomPostExtractor.cleanText("Checkpoint Watch Auckland\n22m\nRoads are clear tonight\nLike\nShare")
+    fun cleanText_stripsTheHeaderChromeOffAHeaderlessPostToo() {
+        // No report header anywhere, so there is nothing to anchor on: the leading lines have to
+        // be recognised as chrome one at a time, and the post kept from the first line that isn't.
+        val cleaned = DomPostExtractor.cleanText(
+            "Online status indicator\nActive\nCheckpoint Watch Auckland\n22m\n·\n" +
+                "Roads are clear tonight\nLike\nShare",
+        )
 
-        assertEquals("Checkpoint Watch Auckland\n22m\nRoads are clear tonight", cleaned)
+        assertEquals("Roads are clear tonight", cleaned)
+    }
+
+    @Test
+    fun cleanText_headerlessPostIsTheSamePostAnHourLater() {
+        // The age line is the whole problem: it moves every scan. If it survives cleaning, the
+        // same post gets a new hash, a new dom: id, a new row and a new-report notification every
+        // single scan.
+        fun article(age: String) =
+            "Checkpoint Watch Auckland\n$age\n·\nRoads are clear tonight, nothing reported\nLike\nComment\nShare"
+
+        val young = DomPostExtractor.extract(listOf(DomPost(article("22m"), "22m", null)), scanTime).single()
+        val older = DomPostExtractor.extract(
+            listOf(DomPost(article("3h"), "3h", null)),
+            scanTime.plus(3, ChronoUnit.HOURS),
+        ).single()
+
+        assertEquals("Roads are clear tonight, nothing reported", young.text)
+        assertEquals(young.text, older.text)
+        assertEquals(young.postId, older.postId)
+        assertEquals(DomPostExtractor.textHash(young.text), DomPostExtractor.textHash(older.text))
+    }
+
+    @Test
+    fun cleanText_keepsAPreambleTheAuthorWroteBeforeTheFirstHeader() {
+        // ReportParser deliberately keeps text before the first header (it becomes the first
+        // report's details), so cleaning must not delete it — or the DOM copy of a post hashes
+        // differently from the JSON copy and the two never bridge.
+        val posted = "UPDATE\n🛑 CHECKPOINT – Trig Road\nStill there"
+        val article = "Online status indicator\nActive\nCheckpoint Watch Auckland\n45m\n·\n" +
+            posted + "\nAll reactions:\n4\nLike\nComment\nShare"
+
+        assertEquals(posted, DomPostExtractor.cleanText(article))
+        assertEquals(DomPostExtractor.textHash(posted), DomPostExtractor.textHash(DomPostExtractor.cleanText(article)))
+    }
+
+    @Test
+    fun cleanText_onlyStripsAWholeLineThatIsExactlyChrome() {
+        // "Active" on its own is the page's online-status line; "Active checkpoint on..." is the
+        // post. Only the exact tokens are chrome.
+        val posted = "Active checkpoint on Lincoln Road, still there"
+
+        assertEquals(posted, DomPostExtractor.cleanText("Checkpoint Watch Auckland\n22m\n$posted"))
+        assertEquals("Follow the diversion signs", DomPostExtractor.cleanText("Follow\nFollow the diversion signs"))
     }
 
     @Test
