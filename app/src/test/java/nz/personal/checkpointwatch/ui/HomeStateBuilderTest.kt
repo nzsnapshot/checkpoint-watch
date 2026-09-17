@@ -7,6 +7,7 @@ import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.scan.ScanSummary
 import nz.personal.checkpointwatch.settings.Settings
 import nz.personal.checkpointwatch.ui.home.BannerBuilder
+import nz.personal.checkpointwatch.ui.home.BannerKind
 import nz.personal.checkpointwatch.ui.home.BannerUi
 import nz.personal.checkpointwatch.ui.home.HomeStateBuilder
 import nz.personal.checkpointwatch.ui.home.ListItem
@@ -410,13 +411,13 @@ class BannerBuilderTest {
     @Test
     fun `scanning shows the normal finding-checkpoints message`() {
         val banner = BannerBuilder.build(scanning = true, firstEver = false, summary = null, newReportCount = 0)
-        assertEquals(BannerUi.Message("Finding checkpoints…"), banner)
+        assertEquals(BannerUi.Message("Finding checkpoints…", BannerKind.SCANNING), banner)
     }
 
     @Test
     fun `scanning for the first time ever has its own copy`() {
         val banner = BannerBuilder.build(scanning = true, firstEver = true, summary = null, newReportCount = 0)
-        assertEquals(BannerUi.Message("Finding checkpoints for the first time…"), banner)
+        assertEquals(BannerUi.Message("Finding checkpoints for the first time…", BannerKind.SCANNING), banner)
     }
 
     @Test
@@ -428,11 +429,11 @@ class BannerBuilderTest {
     @Test
     fun `OK with new reports pluralises correctly`() {
         assertEquals(
-            BannerUi.Message("Found 1 new report"),
+            BannerUi.Message("Found 1 new report", BannerKind.FOUND),
             BannerBuilder.build(false, false, summary(ScrapeStatus.OK), newReportCount = 1),
         )
         assertEquals(
-            BannerUi.Message("Found 3 new reports"),
+            BannerUi.Message("Found 3 new reports", BannerKind.FOUND),
             BannerBuilder.build(false, false, summary(ScrapeStatus.OK), newReportCount = 3),
         )
     }
@@ -440,7 +441,7 @@ class BannerBuilderTest {
     @Test
     fun `OK with zero new reports says so plainly`() {
         assertEquals(
-            BannerUi.Message("No new reports"),
+            BannerUi.Message("No new reports", BannerKind.NONE_NEW),
             BannerBuilder.build(false, false, summary(ScrapeStatus.OK), newReportCount = 0),
         )
     }
@@ -448,11 +449,11 @@ class BannerBuilderTest {
     @Test
     fun `OK_WITH_GAP mentions the gap alongside the count`() {
         assertEquals(
-            BannerUi.Message("Found 2 new reports · earlier posts unavailable"),
+            BannerUi.Message("Found 2 new reports · earlier posts unavailable", BannerKind.GAP),
             BannerBuilder.build(false, false, summary(ScrapeStatus.OK_WITH_GAP), newReportCount = 2),
         )
         assertEquals(
-            BannerUi.Message("Found 1 new report · earlier posts unavailable"),
+            BannerUi.Message("Found 1 new report · earlier posts unavailable", BannerKind.GAP),
             BannerBuilder.build(false, false, summary(ScrapeStatus.OK_WITH_GAP), newReportCount = 1),
         )
     }
@@ -460,7 +461,7 @@ class BannerBuilderTest {
     @Test
     fun `FAILED_NETWORK copy`() {
         assertEquals(
-            BannerUi.Message("Couldn't reach Facebook · showing saved reports"),
+            BannerUi.Message("Couldn't reach Facebook · showing saved reports", BannerKind.FAILED),
             BannerBuilder.build(false, false, summary(ScrapeStatus.FAILED_NETWORK), newReportCount = 0),
         )
     }
@@ -468,7 +469,7 @@ class BannerBuilderTest {
     @Test
     fun `FAILED_NO_DATA copy`() {
         assertEquals(
-            BannerUi.Message("Facebook returned no posts · showing saved reports"),
+            BannerUi.Message("Facebook returned no posts · showing saved reports", BannerKind.FAILED),
             BannerBuilder.build(false, false, summary(ScrapeStatus.FAILED_NO_DATA), newReportCount = 0),
         )
     }

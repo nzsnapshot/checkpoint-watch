@@ -96,7 +96,15 @@ val CheckpointLightColors: ColorScheme = lightColorScheme(
  * carry its own shape", and `outline` is tuned for dividers, so this rides alongside the scheme.
  */
 val ColorScheme.chipOutline: Color
-    get() = if (surface == DarkSurface) DarkChipOutline else LightChipOutline
+    get() = if (isDarkScheme) DarkChipOutline else LightChipOutline
+
+/**
+ * Which half of the theme is in force. A few places need to differ by more than a colour swap —
+ * a light card earns its edge from a hairline border where a dark one earns it from being lighter
+ * than the background — and this is cheaper and clearer than threading a flag through them.
+ */
+val ColorScheme.isDarkScheme: Boolean
+    get() = surface == DarkSurface
 
 /**
  * Follows the system light/dark setting, and nothing else. The system bars are made transparent by

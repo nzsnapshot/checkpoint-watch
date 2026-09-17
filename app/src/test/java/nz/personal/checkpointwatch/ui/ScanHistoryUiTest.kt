@@ -107,8 +107,8 @@ class ScanHistoryUiTest {
     }
 
     @Test
-    fun `every interval the settings screen offers has its own label`() {
-        val labels = ALLOWED_BACKGROUND_MINUTES.map(IntervalUi::label)
+    fun `every interval the settings screen offers has its own compact label`() {
+        val labels = ALLOWED_BACKGROUND_MINUTES.map(IntervalUi::compactLabel)
 
         assertEquals(
             listOf(
@@ -121,5 +121,24 @@ class ScanHistoryUiTest {
             labels,
         )
         assertEquals(labels.size, labels.toSet().size)
+    }
+
+    @Test
+    fun `and its own long label, with only Off shared between the two forms`() {
+        val long = ALLOWED_BACKGROUND_MINUTES.map(IntervalUi::longLabel)
+
+        assertEquals(
+            listOf(
+                R.string.settings_interval_off,
+                R.string.settings_interval_15_long,
+                R.string.settings_interval_30_long,
+                R.string.settings_interval_60_long,
+                R.string.settings_interval_120_long,
+            ),
+            long,
+        )
+        assertEquals(long.size, long.toSet().size)
+        val compact = ALLOWED_BACKGROUND_MINUTES.map(IntervalUi::compactLabel)
+        assertEquals(listOf(R.string.settings_interval_off), long.intersect(compact.toSet()).toList())
     }
 }

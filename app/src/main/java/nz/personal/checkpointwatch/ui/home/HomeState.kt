@@ -21,10 +21,28 @@ sealed interface ListItem {
 /** Counts per type for the last 2 hours ("what's happening now"), and the freshest report time. */
 data class Summary(val counts: Map<ReportType, Int>, val freshest: Instant?)
 
+/** What kind of news the banner is carrying, which decides the small icon in front of it. */
+enum class BannerKind {
+    /** A scan is running. The sweep says so; no icon competes with it. */
+    SCANNING,
+
+    /** The scan brought something back. */
+    FOUND,
+
+    /** The scan worked and there was nothing new. */
+    NONE_NEW,
+
+    /** Found something, but history is missing between this scan and the last. */
+    GAP,
+
+    /** The scan could not do its job. Saved reports are still on screen. */
+    FAILED,
+}
+
 /** The status banner's exact, pre-rendered copy; [BannerUi.None] shows nothing. */
 sealed interface BannerUi {
     data object None : BannerUi
-    data class Message(val text: String) : BannerUi
+    data class Message(val text: String, val kind: BannerKind) : BannerUi
 }
 
 /** Turns a scan's raw state into the banner's exact copy. Pure; NZ English, never alarming. */
@@ -33,18 +51,30 @@ object BannerBuilder {
     fun build(scanning: Boolean, firstEver: Boolean, summary: ScanSummary?, newReportCount: Int): BannerUi {
         if (scanning) {
             val text = if (firstEver) "Finding checkpoints for the first time…" else "Finding checkpoints…"
-            return BannerUi.Message(text)
+            return BannerUi.Message(text, BannerKind.SCANNING)
         }
         if (summary == null) return BannerUi.None
         return when (summary.status) {
-            ScrapeStatus.OK -> BannerUi.Message(
-                if (newReportCount > 0) "Found $newReportCount new ${reportWord(newReportCount)}" else "No new reports",
-            )
+            ScrapeStatus.OK -> if (newReportCount > 0) {
+                BannerUi.Message(
+                    "Found $newReportCount new ${reportWord(newReportCount)}",
+                    BannerKind.FOUND,
+                )
+            } else {
+                BannerUi.Message("No new reports", BannerKind.NONE_NEW)
+            }
             ScrapeStatus.OK_WITH_GAP -> BannerUi.Message(
                 "Found $newReportCount new ${reportWord(newReportCount)} · earlier posts unavailable",
+                BannerKind.GAP,
             )
-            ScrapeStatus.FAILED_NETWORK -> BannerUi.Message("Couldn't reach Facebook · showing saved reports")
-            ScrapeStatus.FAILED_NO_DATA -> BannerUi.Message("Facebook returned no posts · showing saved reports")
+            ScrapeStatus.FAILED_NETWORK -> BannerUi.Message(
+                "Couldn't reach Facebook · showing saved reports",
+                BannerKind.FAILED,
+            )
+            ScrapeStatus.FAILED_NO_DATA -> BannerUi.Message(
+                "Facebook returned no posts · showing saved reports",
+                BannerKind.FAILED,
+            )
             ScrapeStatus.CANCELLED -> BannerUi.None
         }
     }

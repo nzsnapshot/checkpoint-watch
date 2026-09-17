@@ -16,6 +16,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,8 +24,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,14 +42,17 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import nz.personal.checkpointwatch.R
+import nz.personal.checkpointwatch.ui.CwIcons
 import nz.personal.checkpointwatch.ui.TimeFormat
+import nz.personal.checkpointwatch.ui.theme.DarkCrash
+import nz.personal.checkpointwatch.ui.theme.LightCrash
+import nz.personal.checkpointwatch.ui.theme.isDarkScheme
 import java.time.Instant
 
 /** One full pass of the sweep. Slow enough to read as "working", not as "hurry up". */
@@ -62,6 +68,8 @@ private const val STACK_FONT_SCALE = 1.3f
 
 /** Beside the message, the trailing line never takes more of the width than this. */
 private val TRAILING_MAX_WIDTH = 132.dp
+
+private val BANNER_ICON_SIZE = 18.dp
 
 /**
  * What the last (or current) scan has to say, in one calm line.
@@ -79,13 +87,13 @@ fun StatusBanner(
     modifier: Modifier = Modifier,
 ) {
     val message = (banner as? BannerUi.Message)?.text
+    val kind = (banner as? BannerUi.Message)?.kind
     if (message == null && !scanning) return
 
     val scheme = MaterialTheme.colorScheme
     val checked = lastChecked?.let { stringResource(R.string.banner_checked, TimeFormat.ago(it, now)) }
     val scanningDescription = stringResource(R.string.cd_banner_scanning)
     val spoken = message ?: scanningDescription
-    val announcement = if (checked == null) spoken else stringResource(R.string.cd_banner, spoken, checked)
     val stacked = LocalDensity.current.fontScale >= STACK_FONT_SCALE
 
     Column(
@@ -93,25 +101,38 @@ fun StatusBanner(
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(scheme.surfaceContainer)
-            // The whole banner is one polite announcement. Without the merge there is no text on
-            // this node to announce, and the message itself lives inside an AnimatedContent whose
-            // node identity changes with every result — so the region would never fire.
-            .semantics(mergeDescendants = true) {
-                liveRegion = LiveRegionMode.Polite
-                contentDescription = announcement
-            },
+            // In light, container and page are both near-white; the hairline is what makes this a
+            // panel rather than a stray line of text.
+            .border(
+                width = 1.dp,
+                color = if (scheme.isDarkScheme) Color.Transparent else scheme.outlineVariant,
+                shape = RoundedCornerShape(16.dp),
+            ),
     ) {
         val text: @Composable () -> Unit = {
-            AnimatedContent(
-                targetState = message.orEmpty(),
-                transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) },
-                label = "banner-text",
-            ) { value ->
-                Text(
-                    text = value,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = scheme.onSurface,
-                )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                // Only the result belongs in the live region. "Checked 3 min ago" is rewritten by
+                // the ticker every minute, and inside the region that would make TalkBack announce
+                // the banner again every minute for as long as the screen is open.
+                modifier = Modifier.semantics(mergeDescendants = true) {
+                    liveRegion = LiveRegionMode.Polite
+                    contentDescription = spoken
+                },
+            ) {
+                BannerIcon(kind)
+                AnimatedContent(
+                    targetState = message.orEmpty(),
+                    transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) },
+                    label = "banner-text",
+                ) { value ->
+                    Text(
+                        text = value,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = scheme.onSurface,
+                    )
+                }
             }
         }
         val trailing: @Composable () -> Unit = {
@@ -126,27 +147,24 @@ fun StatusBanner(
             }
         }
 
-        // Read once, from the container above; the pieces below are only there to be looked at.
-        Box(modifier = Modifier.clearAndSetSemantics { }) {
-            if (stacked) {
-                // At large text "Checked 3 min ago" no longer fits beside the message, so it goes
-                // underneath it rather than squeezing the message into one word per line.
-                Column(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    text()
-                    trailing()
-                }
-            } else {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Box(modifier = Modifier.weight(1f)) { text() }
-                    trailing()
-                }
+        if (stacked) {
+            // At large text "Checked 3 min ago" no longer fits beside the message, so it goes
+            // underneath it rather than squeezing the message into one word per line.
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                text()
+                trailing()
+            }
+        } else {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(modifier = Modifier.weight(1f)) { text() }
+                trailing()
             }
         }
         AnimatedVisibility(
@@ -158,6 +176,33 @@ fun StatusBanner(
         }
     }
 }
+
+/**
+ * The one-glance version of the message: found something, found nothing, or something went wrong.
+ * Purely decorative — the sentence beside it is what the live region announces — and absent while
+ * a scan runs, where the sweep already says what is happening.
+ */
+@Composable
+private fun BannerIcon(kind: BannerKind?) {
+    val scheme = MaterialTheme.colorScheme
+    val icon = when (kind) {
+        BannerKind.FOUND -> CwIcons.Radar to scheme.primary
+        BannerKind.NONE_NEW -> CwIcons.Check to scheme.onSurfaceVariant
+        BannerKind.GAP, BannerKind.FAILED -> CwIcons.Warning to warningTone()
+        BannerKind.SCANNING, null -> null
+    } ?: return
+    Icon(
+        imageVector = icon.first,
+        contentDescription = null,
+        tint = icon.second,
+        modifier = Modifier.size(BANNER_ICON_SIZE),
+    )
+}
+
+/** The crash orange, reused: a scan that failed is a caution, not an error the owner caused. */
+@Composable
+private fun warningTone(): Color =
+    if (MaterialTheme.colorScheme.isDarkScheme) DarkCrash else LightCrash
 
 /**
  * A 3 dp amber band travelling across a dim track.

@@ -140,17 +140,33 @@ object WatchedSuburbs {
         current.any { it.trim().equals(suburb.trim(), ignoreCase = true) }
 }
 
-/** What each offered background interval is called. Pure, so the five buttons cannot disagree. */
+/**
+ * What each offered background interval is called, in the two forms the control needs: five
+ * segments side by side have room for "15m" and nothing more, while the stacked radio list it
+ * falls back to has room to say what that actually means.
+ *
+ * Pure, so the two forms cannot drift apart and the five buttons cannot disagree.
+ */
 object IntervalUi {
 
     @StringRes
-    fun label(minutes: Int): Int = when (minutes) {
+    fun compactLabel(minutes: Int): Int = when (minutes) {
         0 -> R.string.settings_interval_off
         15 -> R.string.settings_interval_15
         30 -> R.string.settings_interval_30
         60 -> R.string.settings_interval_60
         120 -> R.string.settings_interval_120
         // Unreachable: the row is built from ALLOWED_BACKGROUND_MINUTES, which is exactly these.
+        else -> R.string.settings_interval_off
+    }
+
+    @StringRes
+    fun longLabel(minutes: Int): Int = when (minutes) {
+        0 -> R.string.settings_interval_off
+        15 -> R.string.settings_interval_15_long
+        30 -> R.string.settings_interval_30_long
+        60 -> R.string.settings_interval_60_long
+        120 -> R.string.settings_interval_120_long
         else -> R.string.settings_interval_off
     }
 }

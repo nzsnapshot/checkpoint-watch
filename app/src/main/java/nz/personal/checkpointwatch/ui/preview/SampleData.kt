@@ -8,6 +8,7 @@ import nz.personal.checkpointwatch.settings.Settings
 import nz.personal.checkpointwatch.ui.AreaMention
 import nz.personal.checkpointwatch.ui.ReportUi
 import nz.personal.checkpointwatch.ui.TimeFormat
+import nz.personal.checkpointwatch.ui.home.BannerKind
 import nz.personal.checkpointwatch.ui.home.BannerUi
 import nz.personal.checkpointwatch.ui.home.EmptyStateBuilder
 import nz.personal.checkpointwatch.ui.home.HomeUiState
@@ -248,16 +249,31 @@ object SampleData {
     )
 
     /** The normal evening: a full list, a finished scan that found two new reports. */
-    val home: HomeUiState = state(items, summary, BannerUi.Message("Found 2 new reports"))
+    val home: HomeUiState = state(items, summary, BannerUi.Message("Found 2 new reports", BannerKind.FOUND))
+
+    /**
+     * The one post that carried two reports, on its own. Opening either card is the case where the
+     * original post genuinely says more than the card does, so the expanded section shows it.
+     */
+    val multiReport: HomeUiState = state(
+        items = listOf(
+            ListItem.DayHeader("Today"),
+            ListItem.Report(pakurangaCrash),
+            ListItem.Report(pakurangaCheckpoint),
+        ),
+        summary = Summary(mapOf(ReportType.CRASH to 1, ReportType.CHECKPOINT to 1), minutesAgo(40)),
+        banner = BannerUi.Message("No new reports", BannerKind.NONE_NEW),
+        totalReports = 2,
+    )
 
     /** Mid-scan, with saved reports already on screen. */
-    val scanning: HomeUiState = state(items, summary, BannerUi.Message("Finding checkpoints…"), scanning = true)
+    val scanning: HomeUiState = state(items, summary, BannerUi.Message("Finding checkpoints…", BannerKind.SCANNING), scanning = true)
 
     /** Mid-scan because the owner pulled the list down: the one case with a refresh indicator. */
     val pullRefreshing: HomeUiState = state(
         items = items,
         summary = summary,
-        banner = BannerUi.Message("Finding checkpoints…"),
+        banner = BannerUi.Message("Finding checkpoints…", BannerKind.SCANNING),
         scanning = true,
         pullRefreshing = true,
     )
@@ -266,7 +282,7 @@ object SampleData {
     val quiet: HomeUiState = state(
         items = listOf(ListItem.DayHeader("Today"), ListItem.Report(trigRoad), ListItem.Report(headerless)),
         summary = Summary(emptyMap(), null),
-        banner = BannerUi.Message("No new reports"),
+        banner = BannerUi.Message("No new reports", BannerKind.NONE_NEW),
         totalReports = 2,
     )
 
@@ -274,7 +290,7 @@ object SampleData {
     val firstRun: HomeUiState = state(
         items = emptyList(),
         summary = Summary(emptyMap(), null),
-        banner = BannerUi.Message("Finding checkpoints for the first time…"),
+        banner = BannerUi.Message("Finding checkpoints for the first time…", BannerKind.SCANNING),
         scanning = true,
         lastChecked = null,
         totalReports = 0,
@@ -286,7 +302,7 @@ object SampleData {
     val offline: HomeUiState = state(
         items = emptyList(),
         summary = Summary(emptyMap(), null),
-        banner = BannerUi.Message("Couldn't reach Facebook · showing saved reports"),
+        banner = BannerUi.Message("Couldn't reach Facebook · showing saved reports", BannerKind.FAILED),
         totalReports = 0,
         firstEver = false,
         lastStatus = ScrapeStatus.FAILED_NETWORK,
@@ -296,7 +312,7 @@ object SampleData {
     val noPosts: HomeUiState = state(
         items = emptyList(),
         summary = Summary(emptyMap(), null),
-        banner = BannerUi.Message("Facebook returned no posts · showing saved reports"),
+        banner = BannerUi.Message("Facebook returned no posts · showing saved reports", BannerKind.FAILED),
         totalReports = 0,
         firstEver = false,
         lastStatus = ScrapeStatus.FAILED_NO_DATA,
@@ -306,7 +322,7 @@ object SampleData {
     val nothingYet: HomeUiState = state(
         items = emptyList(),
         summary = Summary(emptyMap(), null),
-        banner = BannerUi.Message("No new reports"),
+        banner = BannerUi.Message("No new reports", BannerKind.NONE_NEW),
         totalReports = 0,
         firstEver = false,
         lastStatus = ScrapeStatus.OK,
@@ -316,7 +332,7 @@ object SampleData {
     val filteredOut: HomeUiState = state(
         items = emptyList(),
         summary = summary,
-        banner = BannerUi.Message("No new reports"),
+        banner = BannerUi.Message("No new reports", BannerKind.NONE_NEW),
         settings = Settings(
             hiddenTypes = ReportType.entries.toSet() - ReportType.SPEED_CAMERA,
             suburbFilter = "HENDERSON",
