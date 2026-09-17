@@ -312,6 +312,86 @@ class ScrapeRecorderTest {
     }
 
     @Test
+    fun duplicatePostIdInOneScanIsDedupedKeepingLongestText() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        val outcome = recorder.record(
+            listOf(
+                post("1", "short text"),
+                post("1", "much longer text that should win the dedupe"),
+            ),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertEquals(1, outcome.new)
+        assertEquals(1, outcome.seen)
+        assertEquals(1, store.posts.size)
+        assertEquals(1, store.sightings.count { it.postId == "1" })
+        assertEquals("much longer text that should win the dedupe", store.posts.getValue("1").text)
+    }
+
+    @Test
+    fun internalDuplicateDoesNotSuppressGapRuleOnGenuineZeroOverlap() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        recorder.record(
+            listOf(post("1", checkpointText)),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        val scanTime = t0.plus(2, ChronoUnit.HOURS)
+        val duplicatedText = "New post text — appears twice in the same scan"
+        val outcome = recorder.record(
+            listOf(post("2", duplicatedText, createdAt = scanTime), post("2", duplicatedText, createdAt = scanTime)),
+            scanTime,
+            scanTime.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertEquals(ScrapeStatus.OK_WITH_GAP, outcome.status)
+        assertEquals(1, outcome.new)
+        assertEquals(1, outcome.seen)
+        assertEquals(1, store.sightings.count { it.postId == "2" })
+        assertTrue(store.posts.getValue("2").gapBefore)
+    }
+
+    @Test
+    fun domAndNumericOfSameTextInOneScanCollapseToSingleNumericRow() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        val outcome = recorder.record(
+            listOf(
+                post("dom:abc123", checkpointText, approx = true),
+                post("789", checkpointText, createdAt = t0.plusSeconds(30)),
+            ),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertEquals(1, outcome.new)
+        assertEquals(1, outcome.seen)
+        assertEquals(1, store.posts.size)
+        assertEquals("789", store.posts.keys.single())
+        assertEquals(1, store.sightings.size)
+    }
+
+    @Test
     fun newReportTimeFallsBackToPostCreatedAtWhenNoReportedTime() = runTest {
         val store = FakeScrapeStore()
         val recorder = ScrapeRecorder(store)

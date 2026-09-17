@@ -18,6 +18,12 @@ private const val DOM_ID_PREFIX = "dom:"
  * DOM fallback's synthetic `dom:` ids onto the real numeric id once the JSON feed catches up) by
  * text hash within 48 hours of its `createdAt`. See the class's test file and the design spec's
  * "ScrapeRecorder (merge logic)" section for the exact rules.
+ *
+ * The incoming list is deduped first ([dedupeIncoming]) so that a post appearing twice in the
+ * same scan — whether under the exact same id, or as both a `dom:` placeholder and its real
+ * numeric id — is written at most once and never "matches" itself: a match only ever means a
+ * match against a row that existed before this scan started, which is what the gap rule and the
+ * new/updated counts depend on.
  */
 class ScrapeRecorder(private val store: ScrapeStore) {
 
@@ -31,15 +37,16 @@ class ScrapeRecorder(private val store: ScrapeStore) {
         failure: ScrapeStatus? = null,
     ): ScrapeOutcome = store.inTransaction {
         val finishedAtMs = finishedAt.toEpochMilli()
+        val distinctPosts = dedupeIncoming(posts)
 
-        if (posts.isEmpty()) {
+        if (distinctPosts.isEmpty()) {
             val status = failure ?: ScrapeStatus.FAILED_NO_DATA
             val scrapeId = insertScrapeRow(startedAt, finishedAt, status, endReason, trigger, collector, seen = 0, new = 0, updated = 0)
             return@inTransaction ScrapeOutcome(scrapeId, status, seen = 0, new = 0, updated = 0, newReports = emptyList())
         }
 
         val hadPosts = store.postCount() > 0
-        val merge = mergePosts(posts, finishedAtMs)
+        val merge = mergePosts(distinctPosts, finishedAtMs)
 
         val gapApplies = hadPosts && merge.matches == 0
         if (gapApplies) {
@@ -57,7 +64,7 @@ class ScrapeRecorder(private val store: ScrapeStore) {
             endReason,
             trigger,
             collector,
-            seen = posts.size,
+            seen = distinctPosts.size,
             new = merge.newCount,
             updated = merge.updatedCount,
         )
@@ -66,11 +73,43 @@ class ScrapeRecorder(private val store: ScrapeStore) {
         ScrapeOutcome(
             scrapeId = scrapeId,
             status = status,
-            seen = posts.size,
+            seen = distinctPosts.size,
             new = merge.newCount,
             updated = merge.updatedCount,
             newReports = merge.newReports,
         )
+    }
+
+    /**
+     * Collapses posts that would otherwise resolve to the same stored row within this one scan,
+     * so [mergePosts] never sees (and never has to match against) two entries for the same
+     * underlying post:
+     *  1. Exact `postId` duplicates are collapsed, keeping the one with the longest text.
+     *  2. Remaining posts that share a text hash (e.g. a `dom:` placeholder and its real numeric
+     *     id both captured in the same scan) are collapsed into one, preferring the numeric id.
+     */
+    private fun dedupeIncoming(posts: List<RawPost>): List<RawPost> {
+        val byId = LinkedHashMap<String, RawPost>()
+        for (post in posts) {
+            val current = byId[post.postId]
+            if (current == null || post.text.length > current.text.length) byId[post.postId] = post
+        }
+
+        val byHash = LinkedHashMap<String, RawPost>()
+        for (post in byId.values) {
+            val hash = DomPostExtractor.textHash(post.text)
+            val current = byHash[hash]
+            if (current == null || post.isPreferredOver(current)) byHash[hash] = post
+        }
+        return byHash.values.toList()
+    }
+
+    /** Prefers a non-`dom:` id over a `dom:` one, then the longer text, when merging duplicates. */
+    private fun RawPost.isPreferredOver(other: RawPost): Boolean {
+        val thisIsDom = postId.startsWith(DOM_ID_PREFIX)
+        val otherIsDom = other.postId.startsWith(DOM_ID_PREFIX)
+        if (thisIsDom != otherIsDom) return otherIsDom
+        return text.length > other.text.length
     }
 
     /** Accumulated effect of merging one scan's posts, before the scrape row's id is known. */

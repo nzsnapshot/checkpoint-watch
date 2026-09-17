@@ -27,6 +27,9 @@ class FakeScrapeStore : ScrapeStore {
         posts.values.firstOrNull { it.textHash == hash && it.createdAt in fromMs..toMs }
 
     override suspend fun insertPost(p: PostEntity) {
+        check(!posts.containsKey(p.postId)) {
+            "duplicate postId ${p.postId}: real Room would violate the posts primary key"
+        }
         posts[p.postId] = p
     }
 
@@ -54,6 +57,10 @@ class FakeScrapeStore : ScrapeStore {
     }
 
     override suspend fun insertSighting(s: SightingEntity) {
+        check(sightings.none { it.scrapeId == s.scrapeId && it.postId == s.postId }) {
+            "duplicate sighting (${s.scrapeId}, ${s.postId}): real Room would violate the " +
+                "scrape_sightings primary key"
+        }
         sightings += s
     }
 }
