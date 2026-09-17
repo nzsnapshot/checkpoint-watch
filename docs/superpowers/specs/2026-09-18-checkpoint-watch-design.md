@@ -1,7 +1,7 @@
 # Checkpoint Watch — Design
 
 Date: 2026-09-18
-Status: approved in chat, pending spec review
+Status: approved in chat; owner asked to proceed straight to build
 
 ## Purpose
 
@@ -256,7 +256,7 @@ Single screen, Material 3, follows system light/dark.
   camera), Other (grey). Filter chips for each type; all on by default.
 - **Area handling:** suburb filter (dropdown built from suburbs in the DB).
   Each card shows an "Also in PAKURANGA" line listing other reports of any
-  type in the same suburb from the last 3 hours (e.g. "Crash · 40 min ago"),
+  type in the same suburb reported within 3 hours of it (e.g. "Crash · 40 min ago"),
   so a crash and police presence in the same area are visible together.
   Reports with no suburb match on identical road name instead.
 - **Gap marker:** a divider "Earlier posts unavailable — app wasn't opened"
