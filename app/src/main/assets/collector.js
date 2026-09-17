@@ -47,10 +47,15 @@
   var MAX_BODY = 3 * 1024 * 1024; // bodies bigger than this are not a feed response
   var MAX_QUEUED_CHARS = 6 * 1024 * 1024; // pre-bridge queue, bounded by size rather than count
   var ROUND_MS = 1500;
-  var MAX_ROUNDS = 24; // 24 x 1.5 s ~ 36 s, inside Kotlin's 45 s scan budget
-  // Four rounds (~6 s) of no new article before the feed counts as finished. Three (~4.5 s) is
-  // too quick on mobile data, where the next batch of posts is often still in flight.
-  var STALL_ROUNDS = 4;
+  // High enough that MAX_ELAPSED_MS, not the round count, is what ends a long scan.
+  var MAX_ROUNDS = 30;
+  // Eight rounds (~12 s) of no new article before a feed that is working counts as finished, and
+  // sixteen (~24 s) before one that is not. The old four rounds (~6 s) ended a real scan on the
+  // owner's phone 4.5 s after the login dialog was closed, with three posts still rendering, no
+  // feed response yet and 29 s of budget unspent. A scan should end at the sign-in wall or at its
+  // own clock; stalling out is the admission that neither happened.
+  var STALL_ROUNDS = 8;
+  var STALL_ROUNDS_MAX = 16;
   var MIN_ROUNDS_BEFORE_EMPTY_STOP = 10; // never give up on an empty feed in the first ~15 s
   // How long a closeless sign-in dialog must persist before it is believed to be the hard wall:
   // quickly once posts have been seen, patiently while the page is still settling.
@@ -65,6 +70,18 @@
   var MAX_DOM_TEXT = 20000;
   var MAX_AGE_TEXT = 16;
   var POST_ID = '"post_id"';
+  // Shorter than this and a [role=article] is an empty skeleton the page has not filled in yet.
+  var MIN_ARTICLE_TEXT = 20;
+
+  // The layout viewport this page is made to believe it has. See forceViewport().
+  var VIEWPORT_CONTENT = 'width=1280';
+  var VIEWPORT_WATCH_MS = 10000;
+
+  // Scrolling. A jump to a bottom we are already at moves nothing and therefore fires no scroll
+  // event, so the feed's loader never hears from us again; these are the nudge that fixes it.
+  var SCROLL_BOTTOM_SLACK = 50; // px from the bottom that already counts as "at the bottom"
+  var NUDGE_FRACTION = 0.6; // of the viewport height, scrolled back up before returning
+  var NUDGE_BACK_MS = 120;
 
   // Diagnostics. All bounded: this is evidence, not a log file, and it travels over the bridge.
   var MAX_DIAG_ROUNDS = 30;
@@ -86,6 +103,12 @@
   var sawArticles = false;
   var wallRounds = 0;
   var failedRounds = 0;
+  var lastScrollTarget = -1;
+
+  var viewportObserver = null;
+  var viewportStopTimer = null;
+  var viewportSeen = false;
+  var viewportBefore = null;
 
   var diagInstall = null;
   var diagRounds = [];
@@ -281,6 +304,178 @@
     }
   }
 
+  // ------------------------------------------------------------- viewport
+  //
+  // The collector's WebView is 1280 x 2400 PHYSICAL pixels, which is not a desktop viewport.
+  // Facebook's desktop page asks for `width=device-width`, and on the owner's phone (device pixel
+  // ratio 2.625) that makes the CSS viewport 487 px wide — measured, in a real scan log. So the
+  // desktop site was being laid out phone-narrow, and the sequence this collector is built around
+  // (close the dialog, scroll, ~10 posts, sign-in wall) was only ever verified at 800-1024 px.
+  //
+  // This is what a browser's "Desktop site" switch does: force the layout viewport to a fixed
+  // width and let the engine scale. `width=1280` and nothing else — an initial-scale or a
+  // shrink-to-fit would pull the layout straight back towards the device's own width.
+  //
+  // It has to survive being injected before <head> exists AND Facebook setting the meta again
+  // afterwards, so it is an observer rather than a one-off write.
+
+  /** Pure: the viewport the page is made to believe it has. */
+  function desiredViewport() {
+    return VIEWPORT_CONTENT;
+  }
+
+  /**
+   * Pure: is this viewport meta content something other than ours?
+   *
+   * Whitespace and case are not differences. Anything that is not a string at all is treated as
+   * missing, which needs writing.
+   */
+  function needsViewportRewrite(content) {
+    try {
+      if (typeof content !== 'string') {
+        return true;
+      }
+      return content.replace(/\s+/g, '').toLowerCase() !== VIEWPORT_CONTENT;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isViewportMeta(node) {
+    try {
+      if (!node || node.nodeType !== 1 || typeof node.getAttribute !== 'function') {
+        return false;
+      }
+      if (String(node.nodeName || '').toLowerCase() !== 'meta') {
+        return false;
+      }
+      return String(node.getAttribute('name') || '').toLowerCase() === 'viewport';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** Rewrites one viewport meta, remembering the first content the page ever asked for. */
+  function forceViewport(meta) {
+    try {
+      if (!meta || typeof meta.getAttribute !== 'function') {
+        return;
+      }
+      var content = meta.getAttribute('content');
+      if (!viewportSeen) {
+        viewportSeen = true;
+        viewportBefore = typeof content === 'string' ? content : null;
+        if (diagInstall) {
+          diagInstall.viewportBefore = viewportBefore;
+        }
+      }
+      if (!needsViewportRewrite(content)) {
+        return;
+      }
+      meta.setAttribute('content', VIEWPORT_CONTENT);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function forceEveryViewport(root) {
+    try {
+      var scope = root && typeof root.querySelectorAll === 'function' ? root : document;
+      var metas = scope.querySelectorAll('meta[name="viewport"]');
+      for (var i = 0; i < metas.length; i++) {
+        forceViewport(metas[i]);
+      }
+      return metas.length;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /** Adds our own viewport when the page never declared one. Called once, at DOMContentLoaded. */
+  function ensureViewport() {
+    try {
+      if (forceEveryViewport(document) > 0) {
+        return;
+      }
+      var head = document.head || document.getElementsByTagName('head')[0];
+      if (!head) {
+        return;
+      }
+      var meta = document.createElement('meta');
+      meta.setAttribute('name', 'viewport');
+      meta.setAttribute('content', VIEWPORT_CONTENT);
+      head.appendChild(meta);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function startViewportWatch() {
+    try {
+      // The late-injection path: the meta is already there, so rewrite it now.
+      forceEveryViewport(document);
+      if (typeof MutationObserver !== 'function') {
+        return;
+      }
+      viewportObserver = new MutationObserver(function (records) {
+        try {
+          for (var i = 0; i < records.length; i++) {
+            var record = records[i] || {};
+            if (record.type === 'attributes') {
+              if (isViewportMeta(record.target)) {
+                forceViewport(record.target);
+              }
+              continue;
+            }
+            var added = record.addedNodes || [];
+            for (var j = 0; j < added.length; j++) {
+              var node = added[j];
+              if (!node || node.nodeType !== 1) {
+                continue;
+              }
+              if (isViewportMeta(node)) {
+                forceViewport(node);
+              } else if (typeof node.querySelectorAll === 'function') {
+                // A whole <head> can arrive in one record.
+                forceEveryViewport(node);
+              }
+            }
+          }
+        } catch (e) {
+          // ignore: one bad batch of mutations is not worth the scan
+        }
+      });
+      viewportObserver.observe(document, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['content']
+      });
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  /** The page has settled (or the scan is over): stop watching. Safe to call more than once. */
+  function stopViewportWatch() {
+    try {
+      if (viewportObserver) {
+        viewportObserver.disconnect();
+        viewportObserver = null;
+      }
+    } catch (e) {
+      // ignore
+    }
+    try {
+      if (viewportStopTimer !== null) {
+        clearTimeout(viewportStopTimer);
+        viewportStopTimer = null;
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
   // ------------------------------------------------------------------ DOM
 
   /** Is this element's own computed style one that shows it? Says nothing about its size. */
@@ -395,9 +590,20 @@
    * An empty feed is not a finished feed: until a single article has rendered, the stall counter
    * says nothing, so the page gets MIN_ROUNDS_BEFORE_EMPTY_STOP rounds before "no change" is
    * allowed to mean anything at all.
+   *
+   * @param pendingPlaceholders top-level [role=article] elements the page has not filled in yet
+   * @param jsonCount           graphql bodies forwarded so far
    */
-  function shouldStopOnStall(stalled, sawArticlesYet, rounds) {
+  function shouldStopOnStall(stalled, sawArticlesYet, rounds, pendingPlaceholders, jsonCount) {
     if (!sawArticlesYet && !(rounds >= MIN_ROUNDS_BEFORE_EMPTY_STOP)) {
+      return false;
+    }
+    if (stalled >= STALL_ROUNDS_MAX) {
+      return true;
+    }
+    // A skeleton article is the page saying a post is on its way, and no forwarded body means
+    // the scan has nothing to show for itself yet. Either way, waiting costs only time we have.
+    if (pendingPlaceholders > 0 || !(jsonCount > 0)) {
       return false;
     }
     return stalled >= STALL_ROUNDS;
@@ -509,8 +715,16 @@
     }
   }
 
-  function topLevelArticles() {
-    var articles = [];
+  /**
+   * The page's own posts, split into the ones that have rendered and the ones that have not.
+   *
+   * `pending` is Facebook's empty skeletons — a [role=article] with almost no text in it. They
+   * are the page promising a post, which is why the scan waits for them rather than counting a
+   * stalled round against itself.
+   */
+  function scanArticles() {
+    var ready = [];
+    var pending = [];
     try {
       var all = document.querySelectorAll('[role="article"]');
       for (var i = 0; i < all.length; i++) {
@@ -522,10 +736,11 @@
             continue;
           }
           var text = (element.innerText || '').trim();
-          if (text.length < 20) {
+          if (text.length < MIN_ARTICLE_TEXT) {
+            pending.push(element);
             continue;
           }
-          articles.push(element);
+          ready.push(element);
         } catch (e) {
           // skip this article
         }
@@ -533,7 +748,11 @@
     } catch (e) {
       // ignore
     }
-    return articles;
+    return { ready: ready, pending: pending };
+  }
+
+  function topLevelArticles() {
+    return scanArticles().ready;
   }
 
   /** Every [role=article] on the page, nested ones included: the raw count, for the round log. */
@@ -570,17 +789,13 @@
     }
   }
 
-  /** Scrolls everything that can be scrolled. Returns whether a fixed scroller was found. */
-  function scrollAll() {
-    var fixedScroller = false;
+  /**
+   * While a dialog is up Facebook pins the feed inside a position:fixed scroller, and the window
+   * no longer scrolls. These are those ancestors of [role=main].
+   */
+  function fixedScrollers() {
+    var found = [];
     try {
-      window.scrollTo(0, document.documentElement.scrollHeight);
-    } catch (e) {
-      // ignore
-    }
-    try {
-      // While a dialog is up Facebook pins the feed inside a position:fixed scroller, and the
-      // window no longer scrolls. Scroll those ancestors of [role=main] as well.
       var node = document.querySelector('[role="main"]');
       var hops = 0;
       while (node && node !== document.body && hops < 30) {
@@ -593,8 +808,7 @@
             node.clientHeight > 200 &&
             node.scrollHeight > node.clientHeight
           ) {
-            node.scrollTop = node.scrollHeight;
-            fixedScroller = true;
+            found.push(node);
           }
         } catch (e) {
           // skip this ancestor
@@ -604,7 +818,152 @@
     } catch (e) {
       // ignore
     }
-    return fixedScroller;
+    return found;
+  }
+
+  function scrollTarget() {
+    try {
+      return document.documentElement ? document.documentElement.scrollHeight : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /**
+   * Belt and braces after every programmatic scroll: a feed loader listening for `scroll` hears
+   * from us even when the engine decided the position did not really change.
+   */
+  function fireScrollEvents() {
+    try {
+      window.dispatchEvent(new Event('scroll', { bubbles: true }));
+    } catch (e) {
+      // ignore
+    }
+    try {
+      document.dispatchEvent(new Event('scroll', { bubbles: true }));
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  /** Is the window already parked at the bottom, where another jump would move nothing? */
+  function atBottom() {
+    try {
+      var target = scrollTarget();
+      if (!(target > 0)) {
+        return false;
+      }
+      return target - ((window.scrollY || 0) + (window.innerHeight || 0)) <= SCROLL_BOTTOM_SLACK;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function scrollToBottom() {
+    var fixed = false;
+    try {
+      window.scrollTo(0, scrollTarget());
+    } catch (e) {
+      // ignore
+    }
+    try {
+      var nodes = fixedScrollers();
+      for (var i = 0; i < nodes.length; i++) {
+        try {
+          nodes[i].scrollTop = nodes[i].scrollHeight;
+          fixed = true;
+        } catch (e) {
+          // skip this scroller
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    fireScrollEvents();
+    return fixed;
+  }
+
+  /** Back up most of a screen, so that the return trip is real movement. */
+  function nudgeUp() {
+    var step = 0;
+    try {
+      step = Math.round((window.innerHeight || 0) * NUDGE_FRACTION);
+    } catch (e) {
+      step = 0;
+    }
+    if (!(step > 0)) {
+      return false;
+    }
+    var moved = false;
+    try {
+      window.scrollBy(0, -step);
+      moved = true;
+    } catch (e) {
+      // ignore
+    }
+    try {
+      var nodes = fixedScrollers();
+      for (var i = 0; i < nodes.length; i++) {
+        try {
+          nodes[i].scrollTop = Math.max(0, nodes[i].scrollTop - step);
+          moved = true;
+        } catch (e) {
+          // skip this scroller
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    fireScrollEvents();
+    return moved;
+  }
+
+  /**
+   * Scrolls the way a person does, and reports what it did.
+   *
+   * A jump to a bottom we are already standing on moves nothing, and a browser fires no scroll
+   * event for movement that did not happen — so on the owner's phone the script sat at the same
+   * offset for four rounds and the feed loader never heard from it again. When the page has not
+   * grown, or we are already at the bottom, this goes back up most of a screen first and returns
+   * a moment later, which is movement in both directions.
+   */
+  function scrollAll() {
+    var nudged = false;
+    var fixed = false;
+    try {
+      var target = scrollTarget();
+      var repeat = lastScrollTarget >= 0 && lastScrollTarget === target;
+      lastScrollTarget = target;
+      if ((atBottom() || repeat) && nudgeUp()) {
+        nudged = true;
+        setTimeout(scrollToBottom, NUDGE_BACK_MS);
+        fixed = fixedScrollers().length > 0;
+      } else {
+        fixed = scrollToBottom();
+      }
+    } catch (e) {
+      // ignore
+    }
+    return { fixedScroller: fixed, nudged: nudged };
+  }
+
+  /**
+   * Brings the next thing the feed owes us into the middle of the viewport, once a round.
+   *
+   * Facebook's loader is an IntersectionObserver as much as a scroll listener, and an observer
+   * only fires when something it is watching actually enters the viewport.
+   */
+  function revealLast(scan) {
+    try {
+      var target = scan.pending.length > 0
+        ? scan.pending[0]
+        : (scan.ready.length > 0 ? scan.ready[scan.ready.length - 1] : null);
+      if (target && typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView({ block: 'center' });
+      }
+    } catch (e) {
+      // ignore
+    }
   }
 
   var AGE_PATTERN = new RegExp(
@@ -763,6 +1122,23 @@
     }
   }
 
+  /** The layout viewport's width in CSS pixels: the number the whole desktop layout hangs on. */
+  function documentWidth() {
+    try {
+      return document.documentElement ? rounded(document.documentElement.clientWidth) : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function screenWidth() {
+    try {
+      return window.screen ? rounded(window.screen.width) : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
   /**
    * The facts that are only true once, recorded when the script installs.
    *
@@ -794,6 +1170,9 @@
         ua: navigator.userAgent,
         uaMobile: mobile,
         viewport: viewportMeta(),
+        // What the page asked for before the desktop viewport was forced on it; filled in the
+        // moment a viewport meta is first seen, which at document start is not yet.
+        viewportBefore: viewportBefore,
         dpr: window.devicePixelRatio,
         xhrWrapped: xhrWrapped,
         fetchWrapped: fetchWrapped,
@@ -828,12 +1207,19 @@
         vis: document.visibilityState,
         iw: window.innerWidth,
         ih: window.innerHeight,
-        dh: document.documentElement ? document.documentElement.scrollHeight : 0,
+        // The three that say whether the desktop viewport really took: the meta as it now reads,
+        // the layout viewport's own width, and the screen behind it.
+        vp: viewportMeta(),
+        vw: documentWidth(),
+        sw: screenWidth(),
+        dh: scrollTarget(),
         sy: rounded(window.scrollY),
         arts: 0,
         allArts: 0,
+        pend: 0,
         dlg: [],
         fixedScroller: false,
+        nudged: false,
         json: jsonCount,
         scripts: scriptCount,
         state: 'none',
@@ -951,6 +1337,7 @@
     }
     ended = true;
     stopLoop();
+    stopViewportWatch();
     sendScriptBlocks();
     send({ t: 'dom', posts: domPosts() });
     sendDiag(reason);
@@ -979,12 +1366,14 @@
       noteRound('dlg', dialogs.dialogs);
       noteRound('state', dialogState);
 
-      var articles = topLevelArticles();
+      var scan = scanArticles();
+      var articles = scan.ready;
       if (articles.length > 0) {
         sawArticles = true;
       }
       noteRound('arts', articles.length);
       noteRound('allArts', allArticleCount());
+      noteRound('pend', scan.pending.length);
 
       wallRounds = dialogState === 'wall' ? wallRounds + 1 : 0;
       noteRound('wallRounds', wallRounds);
@@ -994,7 +1383,10 @@
       }
 
       expandSeeMore(articles);
-      noteRound('fixedScroller', scrollAll());
+      var scrolled = scrollAll();
+      noteRound('fixedScroller', scrolled.fixedScroller);
+      noteRound('nudged', scrolled.nudged);
+      revealLast(scan);
 
       if (articles.length === lastCount) {
         stalled++;
@@ -1004,7 +1396,10 @@
       }
       noteRound('stalled', stalled);
 
-      if (shouldStopOnStall(stalled, sawArticles, rounds) || rounds >= MAX_ROUNDS) {
+      if (
+        shouldStopOnStall(stalled, sawArticles, rounds, scan.pending.length, jsonCount) ||
+        rounds >= MAX_ROUNDS
+      ) {
         finish('NO_MORE_POSTS');
         return;
       }
@@ -1031,6 +1426,15 @@
         return;
       }
       window.__cwStarted = true;
+      // The page has a <head> by now, so this is the last chance to give it a viewport if it
+      // never declared one. The observer keeps watch for another ten seconds after that, because
+      // Facebook's own scripts set the meta again once they run.
+      ensureViewport();
+      try {
+        viewportStopTimer = setTimeout(stopViewportWatch, VIEWPORT_WATCH_MS);
+      } catch (e) {
+        // ignore
+      }
       sendScriptBlocks();
       // An early first round closes the dialog as soon as it appears; the rest are paced.
       setTimeout(round, 300);
@@ -1044,6 +1448,8 @@
     // Before anything else is done, and never allowed to fail: this is the record of the
     // environment the script arrived in, which is half of what a puzzling scan needs explaining.
     recordInstall();
+    // Then, before the page has had a chance to lay anything out: the desktop viewport.
+    startViewportWatch();
   }
 
   try {
@@ -1071,6 +1477,8 @@
       module.exports = {
         isAgeText: isAgeText,
         isShown: isShown,
+        desiredViewport: desiredViewport,
+        needsViewportRewrite: needsViewportRewrite,
         dialogDecision: dialogDecision,
         shouldEndOnWall: shouldEndOnWall,
         shouldStopOnStall: shouldStopOnStall,

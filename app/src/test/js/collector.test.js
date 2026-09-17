@@ -129,22 +129,49 @@ check('shouldEndOnWall: an empty feed gets far longer than the stall floor', fun
   assert.strictEqual(collector.shouldEndOnWall(9, false), true);
 });
 
+check('shouldStopOnStall: the phone case — placeholders pending and no feed response yet', function () {
+  // From the owner's v1.0.1 log: the dialog was closed, one post had rendered, three more were
+  // still empty skeletons, no graphql body had arrived, and the scan gave up after four stalled
+  // rounds with 29 s of its budget unspent. That must never happen again.
+  assert.strictEqual(collector.shouldStopOnStall(4, true, 5, 3, 0), false);
+});
+
 check('shouldStopOnStall: an empty feed is never given up on early', function () {
   // Nothing has rendered yet: the stall counter must not end the scan until the page has had
   // MIN_ROUNDS_BEFORE_EMPTY_STOP (10) rounds to produce a first article.
   [1, 2, 3, 4, 5, 9].forEach(function (rounds) {
-    assert.strictEqual(collector.shouldStopOnStall(8, false, rounds), false, 'round ' + rounds);
+    assert.strictEqual(collector.shouldStopOnStall(8, false, rounds, 0, 1), false, 'round ' + rounds);
   });
-  assert.strictEqual(collector.shouldStopOnStall(4, false, 10), true);
+  assert.strictEqual(collector.shouldStopOnStall(8, false, 10, 0, 1), true);
 });
 
-check('shouldStopOnStall: four stalled rounds, not three, once articles are on the page', function () {
-  // ~6 s of no new articles. Three (~4.5 s) is too quick on mobile data: the next batch of posts
-  // is often still in flight, and giving up there costs the scan its older half.
-  assert.strictEqual(collector.shouldStopOnStall(2, true, 4), false);
-  assert.strictEqual(collector.shouldStopOnStall(3, true, 4), false);
-  assert.strictEqual(collector.shouldStopOnStall(4, true, 4), true);
-  assert.strictEqual(collector.shouldStopOnStall(9, true, 9), true);
+check('shouldStopOnStall: eight stalled rounds once the feed has grown and answered', function () {
+  // ~12 s of no new article, with nothing pending and a feed response already in hand: this is
+  // the only cheap way a scan is allowed to end, because the honest endings are the sign-in wall
+  // and the script's own clock.
+  assert.strictEqual(collector.shouldStopOnStall(4, true, 6, 0, 2), false);
+  assert.strictEqual(collector.shouldStopOnStall(7, true, 9, 0, 2), false);
+  assert.strictEqual(collector.shouldStopOnStall(8, true, 10, 0, 2), true);
+});
+
+check('shouldStopOnStall: a pending placeholder holds the scan open', function () {
+  // A skeleton article is the page telling us a post is on its way.
+  assert.strictEqual(collector.shouldStopOnStall(8, true, 10, 1, 5), false);
+  assert.strictEqual(collector.shouldStopOnStall(15, true, 16, 1, 5), false);
+});
+
+check('shouldStopOnStall: no graphql body yet holds the scan open too', function () {
+  // Nothing has been forwarded, so there is nothing to show for the scan whatever the DOM says.
+  assert.strictEqual(collector.shouldStopOnStall(8, true, 10, 0, 0), false);
+  assert.strictEqual(collector.shouldStopOnStall(15, true, 16, 0, 0), false);
+});
+
+check('shouldStopOnStall: sixteen stalled rounds end it whatever is pending', function () {
+  // ~24 s of a page that is not moving. Past here the wait is no longer patience.
+  assert.strictEqual(collector.shouldStopOnStall(16, true, 17, 3, 0), true);
+  assert.strictEqual(collector.shouldStopOnStall(16, false, 17, 3, 0), true);
+  // ...but not before the empty-feed floor.
+  assert.strictEqual(collector.shouldStopOnStall(16, false, 9, 3, 0), false);
 });
 
 check('pickPostText prefers the message element over the whole article', function () {
@@ -204,6 +231,46 @@ check('isShown survives rubbish input', function () {
   assert.strictEqual(collector.isShown(true, null), false);
   assert.strictEqual(collector.isShown(true, [null, undefined, {}]), false);
   assert.strictEqual(collector.isShown(undefined, undefined), false);
+});
+
+// ----------------------------------------------------------------- viewport
+
+check('desiredViewport is the minimal desktop width, and nothing else', function () {
+  // "width=1280" alone is what a browser's "Desktop site" does. An initial-scale or a
+  // shrink-to-fit would pull the layout back towards the device's own width, which is the whole
+  // problem being fixed.
+  assert.strictEqual(collector.desiredViewport(), 'width=1280');
+});
+
+check('needsViewportRewrite: Facebook\'s own desktop viewport must be replaced', function () {
+  // Measured on the live desktop page. width=device-width on a 1280 physical-pixel WebView at
+  // density 2.75 is a CSS viewport of ~465px, so the desktop site lays out phone-narrow.
+  assert.strictEqual(
+    collector.needsViewportRewrite(
+      'width=device-width,initial-scale=1,maximum-scale=2,shrink-to-fit=no'
+    ),
+    true
+  );
+});
+
+check('needsViewportRewrite: a viewport that is already ours is left alone', function () {
+  assert.strictEqual(collector.needsViewportRewrite('width=1280'), false);
+  assert.strictEqual(collector.needsViewportRewrite('  width=1280  '), false);
+  assert.strictEqual(collector.needsViewportRewrite('width = 1280'), false);
+  assert.strictEqual(collector.needsViewportRewrite('WIDTH=1280'), false);
+});
+
+check('needsViewportRewrite: a missing or empty viewport needs writing', function () {
+  assert.strictEqual(collector.needsViewportRewrite(''), true);
+  assert.strictEqual(collector.needsViewportRewrite('width=1024'), true);
+  assert.strictEqual(collector.needsViewportRewrite('width=1280,initial-scale=1'), true);
+});
+
+check('needsViewportRewrite: rubbish is left alone rather than guessed at', function () {
+  // Not a string at all: there is nothing to compare, and writing on a hunch is how a scan breaks.
+  assert.strictEqual(collector.needsViewportRewrite(null), true);
+  assert.strictEqual(collector.needsViewportRewrite(undefined), true);
+  assert.strictEqual(collector.needsViewportRewrite(42), true);
 });
 
 // -------------------------------------------------------------- diagnostics
