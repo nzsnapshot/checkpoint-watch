@@ -94,6 +94,43 @@ class PostDetailTest {
     }
 
     @Test
+    fun `a follow-up that happens to name the road is not a header, and is worth showing`() {
+        val report = report(
+            postText = "🛑 CHECKPOINT – Lincoln Road, HENDERSON\n" +
+                "After the off-ramp coming from the motorway\n" +
+                "Time: 11:55PM\n" +
+                "Lincoln Road now clear, police gone",
+        )
+
+        assertTrue(PostDetail.postAddsDetail(report))
+    }
+
+    @Test
+    fun `a second header line for a different place is still discounted as a header`() {
+        val report = report(
+            postText = "🛑 CHECKPOINT – Lincoln Road, HENDERSON\n" +
+                "After the off-ramp coming from the motorway\n" +
+                "Time: 11:55PM\n" +
+                "🛑 CHECKPOINT – Great North Road, KELSTON\n" +
+                "Time: 11:40PM",
+        )
+
+        // Only the header and a time line: nothing the card does not already imply.
+        assertFalse(PostDetail.postAddsDetail(report))
+    }
+
+    @Test
+    fun `an ordinary sentence with a dash is not mistaken for a header`() {
+        val report = report(
+            postText = "🛑 CHECKPOINT – Lincoln Road, HENDERSON\n" +
+                "After the off-ramp coming from the motorway\n" +
+                "Two lanes - both being stopped",
+        )
+
+        assertTrue(PostDetail.postAddsDetail(report))
+    }
+
+    @Test
     fun `a headerless post whose whole text is the details adds nothing`() {
         val text = "Roadworks on the Southern Motorway tonight, one lane open until 5am."
         val report = report(road = null, suburb = null, details = text, reportedTimeText = null, postText = text)

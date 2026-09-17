@@ -115,7 +115,7 @@ fun ReportCard(
     // Nowhere to name: no road, no suburb. The label is all the heading there is.
     val headline = report.road == null && report.suburb == null
     val postAddsDetail = remember(report) { PostDetail.postAddsDetail(report) }
-    val description = cardSentence(report, label, ago, expanded && postAddsDetail)
+    val description = cardSentence(report, label, ago, expanded, postAddsDetail)
     val expandLabel = stringResource(R.string.card_expand)
     val collapseLabel = stringResource(R.string.card_collapse)
     val stateText = stringResource(
@@ -326,30 +326,28 @@ private fun Pill(text: String, background: Color, foreground: Color) {
     )
 }
 
-/** The whole card as one sentence, for a screen reader: type, where, when, then what was said. */
+/**
+ * Resolves the wording and hands off to [CardSentence], which is pure and unit-tested. The two
+ * flags are separate because opening a card always reveals the source, but only sometimes the
+ * original post's text.
+ */
 @Composable
-private fun cardSentence(report: ReportUi, label: String, ago: String, expanded: Boolean): String {
-    val reported = stringResource(R.string.a11y_reported, ago)
-    val newSuffix = stringResource(R.string.a11y_new)
-    val oldSuffix = stringResource(R.string.a11y_old)
-    val fullPost = stringResource(R.string.card_full_post)
-    val source = report.source?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.card_source, it) }
-    return remember(report, label, ago, expanded) {
-        val where = listOfNotNull(label, report.road, report.suburb).joinToString(", ")
-        buildString {
-            append(where)
-            append(", ")
-            append(reported)
-            append(". ")
-            if (report.details.isNotBlank()) append(report.details).append(". ")
-            if (report.isNew) append(newSuffix).append(' ')
-            if (report.freshness == Freshness.OLD) append(oldSuffix).append(' ')
-            // What the card shows when open has to be in the sentence too, or opening it is silent
-            // to a screen reader: the merged node is the only thing TalkBack reads here.
-            if (expanded) {
-                append(fullPost).append(". ").append(report.postText).append(". ")
-                if (source != null) append(source).append('.')
-            }
-        }.trim()
+private fun cardSentence(
+    report: ReportUi,
+    label: String,
+    ago: String,
+    expanded: Boolean,
+    showPost: Boolean,
+): String {
+    val words = CardWords(
+        label = label,
+        reported = stringResource(R.string.a11y_reported, ago),
+        isNew = stringResource(R.string.a11y_new),
+        isOld = stringResource(R.string.a11y_old),
+        fullPost = stringResource(R.string.card_full_post),
+        source = report.source?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.card_source, it) },
+    )
+    return remember(report, words, expanded, showPost) {
+        CardSentence.build(report, words, expanded, showPost)
     }
 }

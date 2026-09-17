@@ -11,6 +11,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.ui.theme.chipOutline
@@ -50,8 +56,48 @@ fun TypeChip(
 }
 
 /**
- * The same chip, tinted by an arbitrary [tone] rather than by a report type — used for the area
- * filter, which is the owner's own choice rather than a category, and so carries the amber accent.
+ * A chip that *opens* something rather than toggling it — the area filter, which leads to a sheet.
+ *
+ * It keeps the same shape and tint as the toggles, but not their semantics: built on a `FilterChip`
+ * it announced itself as "tick box, not ticked", which is wrong twice over for a control that opens
+ * a bottom sheet and whose current value is a place name. The semantics are replaced outright with
+ * a button, an action label, and the chosen area as its state.
+ *
+ * @param state what is chosen now, spoken as the control's state ("All areas", "HENDERSON").
+ * @param actionLabel what activating it will do ("Choose area").
+ */
+@Composable
+fun ActionChip(
+    label: String,
+    description: String,
+    state: String,
+    actionLabel: String,
+    icon: ImageVector,
+    tone: Color,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ToneChip(
+        label = label,
+        icon = icon,
+        tone = tone,
+        selected = active,
+        onClick = onClick,
+        modifier = modifier.clearAndSetSemantics {
+            role = Role.Button
+            contentDescription = description
+            stateDescription = state
+            onClick(label = actionLabel) {
+                onClick()
+                true
+            }
+        },
+    )
+}
+
+/**
+ * The same chip, tinted by an arbitrary [tone] rather than by a report type.
  */
 @Composable
 fun ToneChip(

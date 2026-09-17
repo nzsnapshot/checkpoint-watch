@@ -38,6 +38,8 @@
 
     <string name="filter_all_areas">All areas</string>
     <string name="filter_area_title">Choose an area</string>
+    <string name="filter_area_label">Area</string>
+    <string name="filter_area_action">Choose area</string>
     <string name="filter_search_hint">Search areas</string>
     <string name="filter_clear">Clear filters</string>
     <string name="filter_no_areas">No areas yet. They appear once reports have been collected.</string>

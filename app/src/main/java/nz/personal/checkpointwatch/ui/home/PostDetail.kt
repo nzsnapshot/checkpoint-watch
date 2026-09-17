@@ -7,6 +7,16 @@ import java.util.Locale
 private val TIME_PREFIX = Regex("^time\\s*:")
 private val FROM_PREFIX = Regex("^from\\s*:")
 
+/**
+ * A header line: optional emoji or punctuation, then an upper-case type phrase, then a dash, then
+ * the location — the shape `ReportParser` itself looks for. Matched against the raw line, because
+ * being upper-case is the whole signal and lower-casing first would throw it away.
+ *
+ * Deliberately narrow: a line merely *containing* the road name ("Lincoln Road now clear, police
+ * gone") is a genuine follow-up the owner wants, not a header.
+ */
+private val HEADER_LINE = Regex("^[^\\p{L}\\p{N}]*[\\p{Lu}\\p{N}][\\p{Lu}\\p{N} ]*\\s*[\u2013\u2014-]\\s*\\S.*$")
+
 /** Leading emoji, bullets and punctuation a post decorates its header with. */
 private val LEADING_DECORATION = Regex("^[^\\p{L}\\p{N}]+")
 private val TRAILING_DECORATION = Regex("[^\\p{L}\\p{N}]+$")
@@ -30,19 +40,18 @@ object PostDetail {
             report.details.lines().forEach { line -> normalise(line).takeIf { it.isNotEmpty() }?.let(::add) }
             report.source?.let { normalise(it).takeIf(String::isNotEmpty)?.let(::add) }
         }
-        val road = report.road?.let(::normalise)?.takeIf { it.isNotEmpty() }
-        val suburb = report.suburb?.let(::normalise)?.takeIf { it.isNotEmpty() }
 
         return report.postText.lines().any { raw ->
             val line = normalise(raw)
             when {
                 line.isEmpty() -> false
+                // Said on the card already, word for word.
                 line in shown -> false
                 TIME_PREFIX.containsMatchIn(line) -> false
                 FROM_PREFIX.containsMatchIn(line) -> false
-                // The header line naming this report: it is the card's own title and label.
-                road != null && line.contains(road) -> false
-                road == null && suburb != null && line.contains(suburb) -> false
+                // A header line — this report's own, or another report's in the same post. Either
+                // way the card's label and title are what it says.
+                HEADER_LINE.matches(raw.trim()) -> false
                 else -> true
             }
         }
