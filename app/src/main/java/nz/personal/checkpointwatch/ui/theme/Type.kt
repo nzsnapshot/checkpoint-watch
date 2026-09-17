@@ -42,8 +42,12 @@ val AppTypography: Typography = Default.copy(
         letterSpacing = 0.sp,
     ),
     titleSmall = Default.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-    bodyMedium = Default.bodyMedium.copy(lineHeight = 21.sp),
-    // Meta rows: "Reported 9:30 pm · 2 h ago".
+    // Details and meta rows alike: a card keeps to three sizes, and this is its body size.
+    // Tabular figures cost nothing on prose and keep "Reported 9:30 pm · 2 h ago" from shuffling.
+    bodyMedium = Default.bodyMedium.copy(
+        lineHeight = 21.sp,
+        fontFeatureSettings = TABULAR_FIGURES,
+    ),
     bodySmall = Default.bodySmall.copy(
         lineHeight = 18.sp,
         fontFeatureSettings = TABULAR_FIGURES,

@@ -19,6 +19,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -160,7 +161,7 @@ fun ReportCard(
 
                 Text(
                     text = meta,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = bodyColour,
                 )
 
@@ -308,7 +309,7 @@ private fun AlsoInArea(where: String, mentions: List<AreaMention>, now: Instant,
                 )
                 Text(
                     text = "${mentionStyle.label} · ${TimeFormat.ago(mention.at, now)}",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = colour,
                 )
             }
@@ -334,11 +335,14 @@ private fun ExpandedDetail(report: ReportUi, onOpenPost: (String) -> Unit) {
         report.source?.takeIf { it.isNotBlank() }?.let { source ->
             Text(
                 text = stringResource(R.string.card_source, source),
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodyMedium,
                 color = scheme.onSurfaceVariant,
             )
         }
-        TextButton(onClick = { onOpenPost(report.postUrl) }) {
+        TextButton(
+            onClick = { onOpenPost(report.postUrl) },
+            modifier = Modifier.minimumInteractiveComponentSize(),
+        ) {
             Text(stringResource(R.string.card_open_facebook))
             Icon(
                 imageVector = CwIcons.OpenInNew,

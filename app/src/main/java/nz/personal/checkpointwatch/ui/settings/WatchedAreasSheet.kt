@@ -20,6 +20,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -85,7 +86,10 @@ fun WatchedAreasSheet(
                     .padding(top = 12.dp, bottom = 4.dp),
             )
             if (chosen.isNotEmpty()) {
-                TextButton(onClick = { onChange(emptySet()) }) {
+                TextButton(
+                    onClick = { onChange(emptySet()) },
+                    modifier = Modifier.minimumInteractiveComponentSize(),
+                ) {
                     Text(stringResource(R.string.settings_watched_all))
                 }
             }

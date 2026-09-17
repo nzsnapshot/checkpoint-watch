@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -209,36 +208,37 @@ private fun ReportList(
             }
         }
 
-        items(
-            items = state.items,
-            key = ::itemKey,
-            contentType = ::itemContentType,
-        ) { item ->
-            PageWidth(Modifier.animateItem()) {
-                when (item) {
-                    is ListItem.DayHeader -> DayHeader(item.label)
-                    is ListItem.Gap -> GapDivider()
-                    is ListItem.Report -> ReportCard(
-                        report = item.report,
-                        now = state.now,
-                        onOpenPost = onOpenPost,
-                    )
+        // Emitted one by one rather than through items(), because a day header has to be a
+        // stickyHeader: scrolling through yesterday should never leave you wondering which day
+        // you are looking at. Compose pins the most recent sticky header only, so a day heading
+        // takes over from the filter row as soon as you are into the list proper.
+        state.items.forEach { item ->
+            when (item) {
+                is ListItem.DayHeader -> stickyHeader(key = itemKey(item), contentType = "day") {
+                    PageWidth(Modifier.background(MaterialTheme.colorScheme.background)) {
+                        DayHeader(item.label)
+                    }
+                }
+
+                is ListItem.Gap -> item(key = itemKey(item), contentType = "gap") {
+                    PageWidth(Modifier.animateItem()) { GapDivider() }
+                }
+
+                is ListItem.Report -> item(key = itemKey(item), contentType = "report") {
+                    PageWidth(Modifier.animateItem()) {
+                        ReportCard(report = item.report, now = state.now, onOpenPost = onOpenPost)
+                    }
                 }
             }
         }
     }
 }
 
+/** Stable across scans, so a new report slides in rather than the whole list redrawing. */
 private fun itemKey(item: ListItem): Any = when (item) {
     is ListItem.DayHeader -> "day-${item.label}"
     is ListItem.Gap -> "gap-${item.afterPostId}"
     is ListItem.Report -> "report-${item.report.id}"
-}
-
-private fun itemContentType(item: ListItem): Any = when (item) {
-    is ListItem.DayHeader -> "day"
-    is ListItem.Gap -> "gap"
-    is ListItem.Report -> "report"
 }
 
 /**

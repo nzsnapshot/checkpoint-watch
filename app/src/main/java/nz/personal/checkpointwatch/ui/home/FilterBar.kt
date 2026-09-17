@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -77,6 +78,7 @@ fun FilterBar(
             FilterChip(
                 selected = selected,
                 onClick = { onToggleType(type) },
+                modifier = Modifier.minimumInteractiveComponentSize(),
                 label = { Text(style.label) },
                 leadingIcon = {
                     Icon(
@@ -90,6 +92,7 @@ fun FilterBar(
         }
         AssistChip(
             onClick = { sheetOpen = true },
+            modifier = Modifier.minimumInteractiveComponentSize(),
             label = { Text(suburbFilter ?: allAreas) },
             leadingIcon = {
                 Icon(

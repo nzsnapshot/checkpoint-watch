@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -142,7 +143,10 @@ private fun BackgroundSection(state: SettingsUiState, callbacks: SettingsCallbac
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        OutlinedButton(onClick = callbacks.onBatterySettings) {
+        OutlinedButton(
+            onClick = callbacks.onBatterySettings,
+            modifier = Modifier.minimumInteractiveComponentSize(),
+        ) {
             Text(stringResource(R.string.settings_battery_button))
         }
     }
@@ -185,6 +189,7 @@ private fun IntervalChoice(selected: Int, onSelect: (Int) -> Unit) {
                 SegmentedButton(
                     selected = minutes == selected,
                     onClick = { onSelect(minutes) },
+                    modifier = Modifier.minimumInteractiveComponentSize(),
                     shape = SegmentedButtonDefaults.itemShape(index, ALLOWED_BACKGROUND_MINUTES.size),
                     icon = {},
                     label = { Text(stringResource(IntervalUi.label(minutes)), maxLines = 1) },
@@ -259,7 +264,11 @@ private fun NotificationsSection(state: SettingsUiState, callbacks: SettingsCall
                     color = scheme.onSurfaceVariant,
                 )
             }
-            TextButton(onClick = { sheetOpen = true }, enabled = on) {
+            TextButton(
+                onClick = { sheetOpen = true },
+                enabled = on,
+                modifier = Modifier.minimumInteractiveComponentSize(),
+            ) {
                 Text(stringResource(R.string.settings_watched_change))
             }
         }
@@ -292,6 +301,7 @@ private fun TypeChips(chosen: Set<ReportType>, enabled: Boolean, onToggle: (Repo
                 pair.forEach { type ->
                     val style = typeStyle(type)
                     FilterChip(
+                        modifier = Modifier.minimumInteractiveComponentSize(),
                         selected = enabled && type in chosen,
                         enabled = enabled,
                         onClick = { onToggle(type) },
