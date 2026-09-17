@@ -137,6 +137,9 @@
     <string name="end_cancelled">Stopped when the app closed</string>
     <string name="collector_webview">Full page</string>
     <string name="collector_webview_dom">Page text</string>
+    <!-- Facebook's own embed, which is capped at five posts. The number is in the label because
+         "how many could it possibly have seen?" is the question this row exists to answer. -->
+    <string name="collector_plugin">Page widget (5 newest)</string>
     <string name="collector_http">Newest post only</string>
     <string name="collector_none">Nothing collected</string>
 

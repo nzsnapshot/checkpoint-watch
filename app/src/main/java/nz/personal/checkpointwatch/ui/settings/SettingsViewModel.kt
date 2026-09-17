@@ -143,6 +143,7 @@ object ScanHistoryUi {
     fun collectorLabel(collector: CollectorKind): Int = when (collector) {
         CollectorKind.WEBVIEW -> R.string.collector_webview
         CollectorKind.WEBVIEW_DOM -> R.string.collector_webview_dom
+        CollectorKind.PLUGIN -> R.string.collector_plugin
         CollectorKind.HTTP -> R.string.collector_http
         CollectorKind.NONE -> R.string.collector_none
     }

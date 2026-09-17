@@ -10,7 +10,24 @@ enum class ScrapeStatus { OK, OK_WITH_GAP, FAILED_NETWORK, FAILED_NO_DATA, CANCE
 enum class ScanTrigger { FOREGROUND, BACKGROUND }
 
 /** Which collection strategy produced the posts for a scan. */
-enum class CollectorKind { WEBVIEW, WEBVIEW_DOM, HTTP, NONE }
+enum class CollectorKind {
+    /** The page's own feed responses: a full scan, up to about ten posts. */
+    WEBVIEW,
+
+    /** The rendered page, scraped: whatever the feed managed to draw before it stopped. */
+    WEBVIEW_DOM,
+
+    /**
+     * Facebook's embeddable Page Plugin, read after the feed refused to paginate. Always the five
+     * newest posts and never more, so a scan labelled this way is a scan that was rationed.
+     */
+    PLUGIN,
+
+    /** The plain HTTPS GET, which can only ever see the newest post. */
+    HTTP,
+
+    NONE,
+}
 
 /** A report from a genuinely new post, surfaced by [ScrapeRecorder.record] for notifications. */
 data class NewReport(
