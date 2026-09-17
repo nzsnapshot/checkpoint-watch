@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -7,6 +9,22 @@ plugins {
     alias(libs.plugins.roborazzi)
 }
 
+// Release signing (Task 9). Obtainium checks that every update is signed with the same key, so
+// the real keystore is never committed: it is read from an untracked `keystore.properties` file
+// at the repo root (see README "Making a release"). Without that file, the release build type
+// below falls back to the debug key so `assembleRelease` still works for local/CI verification.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val hasKeystoreProperties = keystorePropertiesFile.exists()
+val keystoreProperties = Properties().apply {
+    if (hasKeystoreProperties) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+// versionCode/versionName are overridable per release build: `-PversionCode=2 -PversionName=1.1.0`.
+val releaseVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+val releaseVersionName = project.findProperty("versionName") as String? ?: "1.0.0"
+
 android {
     namespace = "nz.personal.checkpointwatch"
     compileSdk = 36
@@ -15,13 +33,22 @@ android {
         applicationId = "nz.personal.checkpointwatch"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
 
         ksp {
             arg("room.schemaLocation", "$projectDir/schemas")
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            if (hasKeystoreProperties) {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
         }
     }
 
@@ -32,7 +59,17 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasKeystoreProperties) {
+                signingConfigs.getByName("release")
+            } else {
+                logger.warn(
+                    "WARNING: keystore.properties not found at repo root — release build is " +
+                        "falling back to the DEBUG signing key. This APK cannot be used to " +
+                        "update an installation signed with the real release key. See README " +
+                        "'Making a release'."
+                )
+                signingConfigs.getByName("debug")
+            }
         }
         debug {
             isMinifyEnabled = false
@@ -98,4 +135,13 @@ dependencies {
     testImplementation(libs.roborazzi.compose)
     testImplementation(libs.roborazzi.junit.rule)
     debugImplementation(libs.compose.ui.test.manifest)
+}
+
+// Copies the signed release APK out of the variant-named build output into a stable, versioned
+// name at the repo root, ready for `gh release create` (see README "Making a release").
+tasks.register<Copy>("packageReleaseApk") {
+    dependsOn("assembleRelease")
+    from(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
+    into(rootProject.layout.projectDirectory.dir("dist"))
+    rename { "checkpoint-watch-$releaseVersionName.apk" }
 }

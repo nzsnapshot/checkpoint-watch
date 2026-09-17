@@ -6,3 +6,11 @@ local.properties
 .DS_Store
 captures/
 .kotlin/
+
+# Release signing (Task 9): the real keystore and its credentials never live in the repo.
+keystore.properties
+*.jks
+*.keystore
+
+# Signed release APKs produced by :app:packageReleaseApk.
+dist/
