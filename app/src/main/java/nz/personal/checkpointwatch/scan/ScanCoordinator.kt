@@ -1,6 +1,8 @@
 package nz.personal.checkpointwatch.scan
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +72,12 @@ class ScanCoordinator(
     private val recorder: ScrapeRecorder,
     private val lastFinishedAt: suspend () -> Long?,
     private val clock: () -> Instant = Instant::now,
+    /**
+     * Where the parsing and the database work happen. Callers are on the main thread — the screen
+     * on open and on pull-to-refresh — and the pipeline parses the whole feed (half a megabyte or
+     * more of JSON) into element trees before the recorder walks it. Injected so tests can pin it.
+     */
+    private val computeDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
 
     private val running = Mutex()
@@ -119,31 +127,36 @@ class ScanCoordinator(
             // on the chunks. The second call passes no CollectResult because this one is already
             // known to hold nothing.
             val collectedAt = clock()
-            val webView = ScanPipeline.choose(collected, NO_CHUNKS, collectedAt)
+            val webView = withContext(computeDispatcher) {
+                ScanPipeline.choose(collected, NO_CHUNKS, collectedAt)
+            }
             val needsHttp = webView.second == CollectorKind.NONE
             val chunks = if (needsHttp) httpFetcher.fetchChunks() else emptyList()
             val finishedAt = if (needsHttp) clock() else collectedAt
-            val (posts, kind) = if (needsHttp) {
-                ScanPipeline.choose(null, { chunks }, finishedAt)
-            } else {
-                webView
-            }
 
-            val outcome = recorder.record(
-                posts = posts,
-                startedAt = startedAt,
-                finishedAt = finishedAt,
-                trigger = trigger,
-                collector = kind,
-                endReason = collected.end.name,
-                failure = failureFor(posts.isEmpty(), collected.end),
-            )
+            val outcome = withContext(computeDispatcher) {
+                val (posts, kind) = if (needsHttp) {
+                    ScanPipeline.choose(null, { chunks }, finishedAt)
+                } else {
+                    webView
+                }
+                recorder.record(
+                    posts = posts,
+                    startedAt = startedAt,
+                    finishedAt = finishedAt,
+                    trigger = trigger,
+                    collector = kind,
+                    endReason = collected.end.name,
+                    failure = failureFor(posts.isEmpty(), collected.end),
+                )
+            }
             _lastSummary.value = ScanSummary(outcome.status, outcome.new, finishedAt, trigger)
             return outcome
         } catch (cancellation: CancellationException) {
             // The app was left mid-scan. Recording has to finish outside the cancelled job, or
-            // the posts collected so far would be thrown away with it.
-            withContext(NonCancellable) { recordCancelled(trigger, startedAt) }
+            // the posts collected so far would be thrown away with it — and it is the same
+            // parsing and database work as the happy path, so it stays off the caller's thread.
+            withContext(NonCancellable + computeDispatcher) { recordCancelled(trigger, startedAt) }
             throw cancellation
         }
     }

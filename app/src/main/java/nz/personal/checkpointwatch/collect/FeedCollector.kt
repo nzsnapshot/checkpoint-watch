@@ -503,6 +503,17 @@ class FeedCollector(private val appContext: Context) {
             }
         }
 
+        /**
+         * Decoding stays here, on the main thread, deliberately.
+         *
+         * Two of the three messages are control, not data: `end` finishes the scan and `dom`
+         * completes the handshake [requestDomDump] is waiting on. Both have to be applied in the
+         * order they arrived, and both race teardown. Handing raw strings to another thread would
+         * mean an ordered single consumer plus a rendezvous with that handshake — more moving
+         * parts around the one part of the scan that must not deadlock, for a bounded cost: a few
+         * chunks per scan, each capped at MAX_BODY, and the expensive half (walking the JSON for
+         * posts) already runs off the main thread in ScanCoordinator.
+         */
         private fun onMessage(message: WebMessageCompat) {
             progressed = true
             val raw = runCatching { message.data }.getOrNull() ?: return

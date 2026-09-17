@@ -2,8 +2,11 @@ package nz.personal.checkpointwatch.scan
 
 import android.webkit.WebView
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -25,6 +28,8 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.CoroutineContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ScanCoordinatorTest {
@@ -39,12 +44,29 @@ class ScanCoordinatorTest {
     private val collector = FakeCollector()
     private val fetcher = FakeFetcher()
 
-    private fun coordinator() = ScanCoordinator(
+    /**
+     * Stands in for `Dispatchers.Default` in production: a distinct dispatcher, so "the work ran
+     * on the one that was injected" is a claim these tests can actually make, that still runs
+     * inline and keeps them deterministic.
+     */
+    private val computeDispatcher: CoroutineDispatcher = object : CoroutineDispatcher() {
+        override fun dispatch(context: CoroutineContext, block: Runnable) = block.run()
+    }
+
+    /**
+     * [Dispatchers.Unconfined] by default so these tests read as straight-line code; the one test
+     * that cares about which dispatcher the work lands on passes its own.
+     */
+    private fun coordinator(
+        recorder: ScrapeRecorder = this.recorder,
+        compute: CoroutineDispatcher = Dispatchers.Unconfined,
+    ) = ScanCoordinator(
         collector = collector,
         httpFetcher = fetcher,
         recorder = recorder,
         lastFinishedAt = { lastFinishedAt },
         clock = { now },
+        computeDispatcher = compute,
     )
 
     private fun jsonChunk(postId: String) =
@@ -250,7 +272,51 @@ class ScanCoordinatorTest {
         assertEquals(ScrapeStatus.OK, coordinator.scan(ScanTrigger.FOREGROUND, FakeHost, force = true)?.status)
     }
 
+    // --- where the work happens ------------------------------------------------------------
+    //
+    // The screen calls scan() from the main thread. Between them, ScanPipeline.choose parses half
+    // a megabyte or more of feed JSON into element trees and the recorder walks every post: work
+    // that must never run on the caller's thread, or the list janks for as long as a scan takes.
+
+    @Test
+    fun `the pipeline and the recorder run on the injected dispatcher, not the caller's`() = runTest {
+        val capturing = ContextCapturingStore(store)
+        val coordinator = coordinator(recorder = ScrapeRecorder(capturing), compute = computeDispatcher)
+        collector.result = webViewResult()
+
+        coordinator.scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        assertSame(computeDispatcher, capturing.interceptor)
+        assertEquals(1, store.scrapes.size)
+    }
+
+    @Test
+    fun `a cancelled scan is recorded off the caller's thread as well`() = runTest {
+        val capturing = ContextCapturingStore(store)
+        val coordinator = coordinator(recorder = ScrapeRecorder(capturing), compute = computeDispatcher)
+        collector.gate = CompletableDeferred()
+        collector.snapshotResult = CollectResult(listOf(jsonChunk("333")), emptyList(), EndReason.CANCELLED)
+
+        val running = launch { coordinator.scan(ScanTrigger.FOREGROUND, FakeHost, force = true) }
+        advanceUntilIdle()
+        running.cancelAndJoin()
+
+        assertSame(computeDispatcher, capturing.interceptor)
+        assertEquals(ScrapeStatus.CANCELLED.name, store.scrapes.single().status)
+    }
+
     // --- fakes -----------------------------------------------------------------------------
+
+    /** Reports the dispatcher the recorder's transaction was actually running on. */
+    private class ContextCapturingStore(private val delegate: ScrapeStore) : ScrapeStore by delegate {
+        var interceptor: ContinuationInterceptor? = null
+
+        override suspend fun <T> inTransaction(block: suspend () -> T): T {
+            interceptor = currentCoroutineContext()[ContinuationInterceptor]
+            yield()
+            return delegate.inTransaction(block)
+        }
+    }
 
     /**
      * A real Room transaction suspends, so recording is a cancellation point: without the
