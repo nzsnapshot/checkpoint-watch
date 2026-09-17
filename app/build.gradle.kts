@@ -3,6 +3,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+    // Test-only (Task 8b JVM screenshot harness): writes Roborazzi PNGs, no production impact.
+    alias(libs.plugins.roborazzi)
 }
 
 android {
@@ -48,6 +50,8 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric (Task 8b screenshot harness) needs app resources on the unit-test classpath.
+        unitTests.isIncludeAndroidResources = true
     }
 
     packaging {
@@ -85,4 +89,13 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // Test-only: Task 8b JVM screenshot harness (Robolectric + Roborazzi). Renders the stateless
+    // Compose screens under app/src/test to PNGs for design review — no production dependency.
+    testImplementation(libs.compose.ui.test.junit4)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.roborazzi.junit.rule)
+    debugImplementation(libs.compose.ui.test.manifest)
 }

@@ -3,4 +3,6 @@ plugins {
     alias(libs.plugins.kotlin.compose) apply false
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.ksp) apply false
+    // Test-only (Task 8b JVM screenshot harness): writes Roborazzi PNGs, no production impact.
+    alias(libs.plugins.roborazzi) apply false
 }
