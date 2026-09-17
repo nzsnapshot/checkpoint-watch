@@ -230,10 +230,15 @@ private class ScanFacts {
         jsonChunks: Int,
         domPosts: Int,
         appVersion: String,
+        density: String,
     ): List<Pair<String, String?>> = listOf(
         "app" to appVersion,
         "webView" to webView,
         "host" to host,
+        // With this, the CSS width of the view can be worked out from the log alone: the
+        // collector's 1280 physical pixels are 1280/density CSS pixels unless the script's
+        // viewport override took, which the round log's `vw` then shows as 1280.
+        "displayDensity" to density,
         "documentStartScript" to documentStart,
         "sizeAtAttach" to atAttach,
         "sizeAtPageFinished" to atPageFinished,
@@ -298,6 +303,7 @@ class FeedCollector(private val appContext: Context) {
                     jsonChunks = jsonChunks.size,
                     domPosts = domPosts.size,
                     appVersion = appVersion,
+                    density = displayDensity,
                 ),
                 json = diagBody,
             ),
@@ -415,6 +421,15 @@ class FeedCollector(private val appContext: Context) {
         }
     }
 
+    /** The phone's display density, which is what turns the view's physical pixels into CSS ones. */
+    private val displayDensity: String by lazy {
+        try {
+            appContext.resources.displayMetrics.density.toString()
+        } catch (_: Exception) {
+            "unknown"
+        }
+    }
+
     /** Which WebView implementation is actually running the page on this phone, and its version. */
     private fun webViewDescription(): String = try {
         WebViewCompat.getCurrentWebViewPackage(appContext)
@@ -500,12 +515,31 @@ class FeedCollector(private val appContext: Context) {
         // JavaScript is the entire point: the page is a JS app, and only a real engine gets past
         // the login dialog. It is confined to https://www.facebook.com by the navigation guard,
         // by the single message listener, and by the settings below.
+        //
+        // The viewport, which decides whether Facebook lays its desktop site out as a desktop
+        // site, is settled in two halves and neither works alone:
+        //
+        //  1. Here. `useWideViewPort` is what makes the engine honour a viewport meta that asks
+        //     for a width larger than the view, and `loadWithOverviewMode` is what makes it then
+        //     scale that wider layout down to fit. Without the pair, a `width=1280` meta on a
+        //     1280-physical-pixel view is ignored. `textZoom = 100` keeps the phone's system
+        //     font-size setting out of it: at 130% text the desktop layout reflows into
+        //     something nobody ever verified this collector against.
+        //  2. `collector.js`, which forces the meta itself. The view being 1280 PHYSICAL pixels
+        //     is not a desktop viewport: Facebook asks for `width=device-width`, and at the
+        //     owner's device pixel ratio of 2.625 that is a CSS viewport of 487 px — measured, in
+        //     a real scan log. The script rewrites the meta to `width=1280`, which is what a
+        //     browser's "Desktop site" switch does.
+        //
+        // The view's own pixel size is deliberately left alone: it is the window onto the page,
+        // not the page's idea of how wide the world is.
         with(webView.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
             userAgentString = Constants.DESKTOP_UA
             useWideViewPort = true
             loadWithOverviewMode = true
+            textZoom = 100
             blockNetworkImage = true
             allowFileAccess = false
             allowContentAccess = false

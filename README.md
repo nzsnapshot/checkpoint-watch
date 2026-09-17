@@ -32,10 +32,12 @@ shows it to you in its own screen. That's all it does.
 ## How it works
 
 The app opens the public Facebook page in a WebView that is never shown on
-screen (it sits behind the app's own UI, fully covered). It waits for the
-page to load as a logged-out visitor, closes the one login prompt Facebook
-shows, and lets the page load a bit further, then reads the post data the
-page itself already downloaded. It never logs in, never asks for a password,
+screen (it sits behind the app's own UI, fully covered). The hidden page is
+laid out as a 1280-pixel-wide desktop site, the same as a browser's "Desktop
+site" setting, because that is the layout Facebook serves the most posts to.
+It waits for the page to load as a logged-out visitor, closes the one login
+prompt Facebook shows, and lets the page load a bit further, then reads the
+post data the page itself already downloaded. It never logs in, never asks for a password,
 and never touches any Facebook account.
 
 A few things follow from that:
