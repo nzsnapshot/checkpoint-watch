@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import nz.personal.checkpointwatch.App
@@ -19,6 +21,7 @@ import nz.personal.checkpointwatch.collect.WebViewHost
 import nz.personal.checkpointwatch.data.ReportDao
 import nz.personal.checkpointwatch.data.ReportRow
 import nz.personal.checkpointwatch.data.ScanTrigger
+import nz.personal.checkpointwatch.data.ScrapeDao
 import nz.personal.checkpointwatch.data.ScrapeStatus
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.scan.ScanCoordinator
@@ -84,6 +87,14 @@ data class HomeUiState(
     val banner: BannerUi,
     val lastChecked: Instant?,
     val totalReports: Int,
+    /** No scan has ever been recorded on this phone; the empty state says so rather than "none". */
+    val firstEver: Boolean,
+    /**
+     * The moment this state was built. Relative times ("12 min ago") are rendered against it
+     * rather than against `Instant.now()` read inside a composable, so the whole screen agrees
+     * with itself and a preview or screenshot test renders the same thing every run.
+     */
+    val now: Instant,
 ) {
     companion object {
         val Loading = HomeUiState(
@@ -96,6 +107,8 @@ data class HomeUiState(
             banner = BannerUi.None,
             lastChecked = null,
             totalReports = 0,
+            firstEver = true,
+            now = Instant.EPOCH,
         )
     }
 }
@@ -214,6 +227,26 @@ object HomeStateBuilder {
         ReportType.entries.firstOrNull { it.name == this } ?: ReportType.OTHER
 }
 
+/**
+ * What tapping a summary tile does to the list's type filter.
+ *
+ * A tile is a shortcut, not a third filter: tapping one narrows the list to that type alone, and
+ * tapping the same tile again puts everything back. Anything else the owner had hidden is
+ * forgotten by the first tap, which is the point — it is a "just show me the checkpoints" button.
+ *
+ * Pure, so the behaviour is decided once and unit-tested rather than re-derived in a composable.
+ */
+object TypeFilter {
+
+    /** The hidden set after tapping [type]'s tile, given what is hidden now. */
+    fun solo(hidden: Set<ReportType>, type: ReportType): Set<ReportType> =
+        if (isSolo(hidden, type)) emptySet() else ReportType.entries.toSet() - type
+
+    /** True when [type] is the only type currently showing. */
+    fun isSolo(hidden: Set<ReportType>, type: ReportType): Boolean =
+        type !in hidden && hidden.size == ReportType.entries.size - 1
+}
+
 /** How often [HomeViewModel] refreshes "now" for relative times and the 2 h summary window. */
 private const val TICK_INTERVAL_MS = 30_000L
 
@@ -224,6 +257,7 @@ private const val TICK_INTERVAL_MS = 30_000L
  */
 class HomeViewModel(
     private val reportDao: ReportDao,
+    private val scrapeDao: ScrapeDao,
     private val settingsStore: SettingsStore,
     private val coordinator: ScanCoordinator,
     private val clock: () -> Instant = Instant::now,
@@ -232,6 +266,15 @@ class HomeViewModel(
     /** Start of the most recent scan this process began; reports first seen since then are "new". */
     @Volatile
     private var newSince: Instant? = null
+
+    /**
+     * Set when a scan is cut short by the owner leaving the app. The coordinator throttles scans to
+     * one every two minutes, and a cancelled scan counts as a scan — so without this the next open
+     * would be skipped and the screen would sit on stale data. The next on-open scan forces itself
+     * through instead.
+     */
+    @Volatile
+    private var forceNextOpen = false
 
     init {
         viewModelScope.launch {
@@ -248,6 +291,12 @@ class HomeViewModel(
         }
     }
 
+    /**
+     * "Has this app ever scanned?", from the database rather than from this process's memory — so
+     * the first-run copy is only ever shown on a genuine first run, not after a restart.
+     */
+    private val neverScanned: Flow<Boolean> = scrapeDao.observeRecent(1).map { it.isEmpty() }
+
     val uiState: StateFlow<HomeUiState> = combine(
         combine(
             reportDao.observeRows(),
@@ -259,15 +308,15 @@ class HomeViewModel(
             Snapshot(rows, suburbs, settings, scanState, lastSummary)
         },
         ticker,
-    ) { snapshot, now -> buildState(snapshot, now) }
+        neverScanned,
+    ) { snapshot, now, firstEver -> buildState(snapshot, now, firstEver) }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeUiState.Loading)
 
-    private fun buildState(snapshot: Snapshot, now: Instant): HomeUiState {
+    private fun buildState(snapshot: Snapshot, now: Instant, firstEver: Boolean): HomeUiState {
         val scanning = snapshot.scanState is ScanState.Scanning
         val built = HomeStateBuilder.build(snapshot.rows, snapshot.settings, now, newSince)
         val newCount = HomeStateBuilder.newReportCount(snapshot.rows, newSince)
-        val firstEver = snapshot.rows.isEmpty() && snapshot.lastSummary == null
         val banner = BannerBuilder.build(scanning, firstEver, snapshot.lastSummary, newCount)
         return HomeUiState(
             loading = false,
@@ -279,11 +328,37 @@ class HomeViewModel(
             banner = banner,
             lastChecked = snapshot.lastSummary?.finishedAt,
             totalReports = built.totalReports,
+            firstEver = firstEver,
+            now = now,
         )
     }
 
-    fun refresh(host: WebViewHost, force: Boolean) {
-        viewModelScope.launch { coordinator.scan(ScanTrigger.FOREGROUND, host, force) }
+    /**
+     * The scan the screen runs when it is opened. Suspends, deliberately: the caller runs it inside
+     * `repeatOnLifecycle(STARTED)` so that leaving the app cancels the coroutine and, with it, the
+     * WebView — which is what the design promises. Running it in [viewModelScope] would let a scan
+     * carry on with the screen gone.
+     */
+    suspend fun scanOnOpen(host: WebViewHost) = runScan(host, force = forceNextOpen)
+
+    /** Pull to refresh: always forced, because the owner asked for it just now. */
+    suspend fun refresh(host: WebViewHost) = runScan(host, force = true)
+
+    private suspend fun runScan(host: WebViewHost, force: Boolean) {
+        forceNextOpen = false
+        try {
+            coordinator.scan(ScanTrigger.FOREGROUND, host, force)
+        } catch (cancellation: CancellationException) {
+            forceNextOpen = true
+            throw cancellation
+        }
+    }
+
+    /** A summary tile: show only this type, or, if it is already the only one, show them all. */
+    fun soloType(type: ReportType) {
+        viewModelScope.launch {
+            settingsStore.update { it.copy(hiddenTypes = TypeFilter.solo(it.hiddenTypes, type)) }
+        }
     }
 
     fun toggleType(type: ReportType) {
@@ -320,6 +395,7 @@ class HomeViewModel(
             val container = (application as App).container
             return HomeViewModel(
                 reportDao = container.reportDao,
+                scrapeDao = container.scrapeDao,
                 settingsStore = container.settings,
                 coordinator = container.scanCoordinator,
             ) as T
