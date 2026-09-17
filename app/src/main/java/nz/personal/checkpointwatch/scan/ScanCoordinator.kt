@@ -1,0 +1,195 @@
+package nz.personal.checkpointwatch.scan
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
+import nz.personal.checkpointwatch.collect.CollectResult
+import nz.personal.checkpointwatch.collect.EndReason
+import nz.personal.checkpointwatch.collect.WebViewHost
+import nz.personal.checkpointwatch.data.CollectorKind
+import nz.personal.checkpointwatch.data.ScanTrigger
+import nz.personal.checkpointwatch.data.ScrapeOutcome
+import nz.personal.checkpointwatch.data.ScrapeRecorder
+import nz.personal.checkpointwatch.data.ScrapeStatus
+import java.time.Duration
+import java.time.Instant
+
+/** A scan sooner than this after the last one finished is not worth Facebook's bandwidth. */
+private val MIN_INTERVAL: Duration = Duration.ofMinutes(2)
+
+/** Nothing to fall back on: used for the pass that decides whether an HTTP fetch is needed. */
+private val NO_CHUNKS: () -> List<String> = { emptyList() }
+
+/** Whether a scan is running right now; the UI's banner follows this. */
+sealed interface ScanState {
+    data object Idle : ScanState
+    data object Scanning : ScanState
+}
+
+/** How the most recent recorded scan went, for the banner and for throttling the next one. */
+data class ScanSummary(
+    val status: ScrapeStatus,
+    val new: Int,
+    val finishedAt: Instant,
+    val trigger: ScanTrigger,
+)
+
+/**
+ * The WebView scan, as the coordinator needs it. `FeedCollector` is the real one; the interface
+ * keeps the coordinator testable on the JVM.
+ */
+interface PostCollector {
+    suspend fun collect(host: WebViewHost): CollectResult
+
+    /** What the collector has captured so far, readable after a cancelled [collect]. */
+    fun snapshot(): CollectResult
+}
+
+/** The plain HTTPS GET fallback; `HttpLatestFetcher` is the real one. */
+fun interface LatestFetcher {
+    suspend fun fetchChunks(): List<String>
+}
+
+/**
+ * Runs one scan at a time for the whole process, whoever asks: the screen on open and on
+ * pull-to-refresh, or [ScanWorker] in the background.
+ *
+ * Rules that live here rather than in a caller, so both callers get them:
+ *  - one at a time — a scan while another is running is skipped (`null`), never queued;
+ *  - not too often — without `force`, a scan within two minutes of the last one is skipped;
+ *  - every run that got as far as collecting is recorded, success or failure, including a run
+ *    cancelled because the owner left the app: whatever it had captured is still saved.
+ */
+class ScanCoordinator(
+    private val collector: PostCollector,
+    private val httpFetcher: LatestFetcher,
+    private val recorder: ScrapeRecorder,
+    private val lastFinishedAt: suspend () -> Long?,
+    private val clock: () -> Instant = Instant::now,
+) {
+
+    private val running = Mutex()
+
+    private val _state = MutableStateFlow<ScanState>(ScanState.Idle)
+    val state: StateFlow<ScanState> = _state.asStateFlow()
+
+    private val _lastSummary = MutableStateFlow<ScanSummary?>(null)
+    val lastSummary: StateFlow<ScanSummary?> = _lastSummary.asStateFlow()
+
+    /**
+     * @return the recorded outcome, or `null` when this scan was skipped (another one is running,
+     *   or the last one finished less than two minutes ago and [force] is false).
+     */
+    suspend fun scan(trigger: ScanTrigger, host: WebViewHost, force: Boolean = false): ScrapeOutcome? {
+        if (!running.tryLock()) return null
+        try {
+            val startedAt = clock()
+            if (!force && finishedRecently(startedAt)) return null
+            _state.value = ScanState.Scanning
+            return runScan(trigger, host, startedAt)
+        } finally {
+            _state.value = ScanState.Idle
+            running.unlock()
+        }
+    }
+
+    /** Uses the database and this process's own last scan, whichever is later. */
+    private suspend fun finishedRecently(now: Instant): Boolean {
+        val stored = lastFinishedAt()
+        val remembered = _lastSummary.value?.finishedAt?.toEpochMilli()
+        val last = maxOf(stored ?: Long.MIN_VALUE, remembered ?: Long.MIN_VALUE)
+        if (last == Long.MIN_VALUE) return false
+        return now.toEpochMilli() - last < MIN_INTERVAL.toMillis()
+    }
+
+    private suspend fun runScan(
+        trigger: ScanTrigger,
+        host: WebViewHost,
+        startedAt: Instant,
+    ): ScrapeOutcome {
+        try {
+            val collected = collect(host)
+
+            // choose() is pure but the HTTP fetch suspends, so the decision is made here: fetch
+            // only once the WebView's own sources have come back empty, then let choose() work
+            // on the chunks. The second call passes no CollectResult because this one is already
+            // known to hold nothing.
+            val collectedAt = clock()
+            val webView = ScanPipeline.choose(collected, NO_CHUNKS, collectedAt)
+            val needsHttp = webView.second == CollectorKind.NONE
+            val chunks = if (needsHttp) httpFetcher.fetchChunks() else emptyList()
+            val finishedAt = if (needsHttp) clock() else collectedAt
+            val (posts, kind) = if (needsHttp) {
+                ScanPipeline.choose(null, { chunks }, finishedAt)
+            } else {
+                webView
+            }
+
+            val outcome = recorder.record(
+                posts = posts,
+                startedAt = startedAt,
+                finishedAt = finishedAt,
+                trigger = trigger,
+                collector = kind,
+                endReason = collected.end.name,
+                failure = failureFor(posts.isEmpty(), collected.end),
+            )
+            _lastSummary.value = ScanSummary(outcome.status, outcome.new, finishedAt, trigger)
+            return outcome
+        } catch (cancellation: CancellationException) {
+            // The app was left mid-scan. Recording has to finish outside the cancelled job, or
+            // the posts collected so far would be thrown away with it.
+            withContext(NonCancellable) { recordCancelled(trigger, startedAt) }
+            throw cancellation
+        }
+    }
+
+    /**
+     * A collector that throws is a scan that reached nothing — an unusable WebView, say — so it
+     * is treated exactly like a page that failed to load: whatever was buffered, marked as a
+     * network error, which lets the HTTP fallback have its turn.
+     */
+    private suspend fun collect(host: WebViewHost): CollectResult =
+        try {
+            collector.collect(host)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            collector.snapshot().copy(end = EndReason.NETWORK_ERROR)
+        }
+
+    private fun failureFor(noPosts: Boolean, end: EndReason): ScrapeStatus? = when {
+        !noPosts -> null
+        end == EndReason.NETWORK_ERROR -> ScrapeStatus.FAILED_NETWORK
+        else -> ScrapeStatus.FAILED_NO_DATA
+    }
+
+    /**
+     * Records the partial scan. No HTTP fallback: the owner has left, and a fetch here would
+     * outlive the screen that asked for it. [lastSummary] is left alone, because a cancelled
+     * scan is not a result the banner should report.
+     */
+    private suspend fun recordCancelled(trigger: ScanTrigger, startedAt: Instant) {
+        try {
+            val snapshot = collector.snapshot()
+            val finishedAt = clock()
+            val (posts, kind) = ScanPipeline.choose(snapshot, NO_CHUNKS, finishedAt)
+            recorder.record(
+                posts = posts,
+                startedAt = startedAt,
+                finishedAt = finishedAt,
+                trigger = trigger,
+                collector = kind,
+                endReason = snapshot.end.name,
+                failure = ScrapeStatus.CANCELLED,
+            )
+        } catch (_: Exception) {
+            // Losing the record of a cancelled scan is a shame; replacing the cancellation with
+            // a database error on the way out would be worse.
+        }
+    }
+}
