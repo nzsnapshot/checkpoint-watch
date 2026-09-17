@@ -10,7 +10,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import nz.personal.checkpointwatch.collect.CollectResult
+import nz.personal.checkpointwatch.collect.DiagnosticsText
 import nz.personal.checkpointwatch.collect.EndReason
+import nz.personal.checkpointwatch.collect.RawPost
 import nz.personal.checkpointwatch.collect.WebViewHost
 import nz.personal.checkpointwatch.data.CollectorKind
 import nz.personal.checkpointwatch.data.ScanTrigger
@@ -71,6 +73,12 @@ class ScanCoordinator(
     private val httpFetcher: LatestFetcher,
     private val recorder: ScrapeRecorder,
     private val lastFinishedAt: suspend () -> Long?,
+    /**
+     * Where the scan's diagnostics are left for the owner to copy. Every ending writes one,
+     * including a failure and a cancellation — those are the scans worth explaining. Optional
+     * because nothing else depends on it: a scan with nowhere to leave its notes is still a scan.
+     */
+    private val diagnostics: ScanDiagnosticsStore? = null,
     private val clock: () -> Instant = Instant::now,
     /**
      * Where the parsing and the database work happen. Callers are on the main thread — the screen
@@ -134,12 +142,13 @@ class ScanCoordinator(
             val chunks = if (needsHttp) httpFetcher.fetchChunks() else emptyList()
             val finishedAt = if (needsHttp) clock() else collectedAt
 
-            val outcome = withContext(computeDispatcher) {
-                val (posts, kind) = if (needsHttp) {
+            val (outcome, chosen) = withContext(computeDispatcher) {
+                val chosen = if (needsHttp) {
                     ScanPipeline.choose(null, { chunks }, finishedAt)
                 } else {
                     webView
                 }
+                val (posts, kind) = chosen
                 recorder.record(
                     posts = posts,
                     startedAt = startedAt,
@@ -148,8 +157,9 @@ class ScanCoordinator(
                     collector = kind,
                     endReason = collected.end.name,
                     failure = failureFor(posts.isEmpty(), collected.end),
-                )
+                ) to chosen
             }
+            writeDiagnostics(trigger, collected, chosen, outcome.status)
             _lastSummary.value = ScanSummary(outcome.status, outcome.new, finishedAt, trigger)
             return outcome
         } catch (cancellation: CancellationException) {
@@ -190,7 +200,8 @@ class ScanCoordinator(
         try {
             val snapshot = collector.snapshot()
             val finishedAt = clock()
-            val (posts, kind) = ScanPipeline.choose(snapshot, NO_CHUNKS, finishedAt)
+            val chosen = ScanPipeline.choose(snapshot, NO_CHUNKS, finishedAt)
+            val (posts, kind) = chosen
             recorder.record(
                 posts = posts,
                 startedAt = startedAt,
@@ -200,9 +211,43 @@ class ScanCoordinator(
                 endReason = snapshot.end.name,
                 failure = ScrapeStatus.CANCELLED,
             )
+            writeDiagnostics(trigger, snapshot, chosen, ScrapeStatus.CANCELLED)
         } catch (_: Exception) {
             // Losing the record of a cancelled scan is a shame; replacing the cancellation with
             // a database error on the way out would be worse.
+        }
+    }
+
+    /**
+     * Leaves the scan's account of itself where Settings can copy it from: the coordinator's own
+     * facts — which trigger, which source was chosen, how many posts came out, how it was recorded
+     * — above the collector's block.
+     *
+     * Best effort by design. The diagnostics exist to explain a disappointing scan, and must never
+     * be able to cause one.
+     */
+    private suspend fun writeDiagnostics(
+        trigger: ScanTrigger,
+        collected: CollectResult,
+        chosen: Pair<List<RawPost>, CollectorKind>,
+        status: ScrapeStatus,
+    ) {
+        val store = diagnostics ?: return
+        try {
+            val header = DiagnosticsText.header(
+                listOf(
+                    "trigger" to trigger.name,
+                    "status" to status.name,
+                    "endReason" to collected.end.name,
+                    "collector" to chosen.second.name,
+                    "postsExtracted" to chosen.first.size.toString(),
+                ),
+            )
+            store.write(trigger, header + (collected.diagnostics.orEmpty()))
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            // ignore
         }
     }
 }

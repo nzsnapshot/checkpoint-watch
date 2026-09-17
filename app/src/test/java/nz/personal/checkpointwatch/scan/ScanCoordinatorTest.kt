@@ -43,6 +43,7 @@ class ScanCoordinatorTest {
 
     private val collector = FakeCollector()
     private val fetcher = FakeFetcher()
+    private val diagnostics = FakeDiagnosticsStore()
 
     /**
      * Stands in for `Dispatchers.Default` in production: a distinct dispatcher, so "the work ran
@@ -65,6 +66,7 @@ class ScanCoordinatorTest {
         httpFetcher = fetcher,
         recorder = recorder,
         lastFinishedAt = { lastFinishedAt },
+        diagnostics = diagnostics,
         clock = { now },
         computeDispatcher = compute,
     )
@@ -72,10 +74,11 @@ class ScanCoordinatorTest {
     private fun jsonChunk(postId: String) =
         """{"post_id":"$postId","creation_time":1758186000,"message":{"text":"CHECKPOINT - Lincoln Road, HENDERSON"}}"""
 
-    private fun webViewResult(postId: String = "111") =
-        CollectResult(listOf(jsonChunk(postId)), emptyList(), EndReason.NO_MORE_POSTS)
+    private fun webViewResult(postId: String = "111", diagnostics: String? = COLLECTOR_DIAGNOSTICS) =
+        CollectResult(listOf(jsonChunk(postId)), emptyList(), EndReason.NO_MORE_POSTS, diagnostics)
 
-    private fun emptyResult(end: EndReason) = CollectResult(emptyList(), emptyList(), end)
+    private fun emptyResult(end: EndReason, diagnostics: String? = COLLECTOR_DIAGNOSTICS) =
+        CollectResult(emptyList(), emptyList(), end, diagnostics)
 
     // --- one at a time ---------------------------------------------------------------------
 
@@ -234,6 +237,84 @@ class ScanCoordinatorTest {
         assertEquals(EndReason.NETWORK_ERROR.name, store.scrapes.single().endReason)
     }
 
+    // --- diagnostics -----------------------------------------------------------------------
+    //
+    // The owner's phone cannot be inspected from here, so the evidence has to survive the scan
+    // and be somewhere they can copy it from. That means every ending: a scan that fails or is
+    // cancelled is exactly the scan worth explaining.
+
+    @Test
+    fun `a successful scan hands its diagnostics to the store, under its own trigger`() = runTest {
+        collector.result = webViewResult()
+
+        coordinator().scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        val written = diagnostics.written.single()
+        assertEquals(ScanTrigger.FOREGROUND, written.first)
+        // The collector's own account is kept whole...
+        assertTrue(written.second.contains(COLLECTOR_DIAGNOSTICS))
+        // ...under the facts only the coordinator knows.
+        assertTrue(written.second.contains("trigger=FOREGROUND"))
+        assertTrue(written.second.contains("collector=${CollectorKind.WEBVIEW.name}"))
+        assertTrue(written.second.contains("postsExtracted=1"))
+    }
+
+    @Test
+    fun `a failed scan is written too, and says so`() = runTest {
+        collector.result = emptyResult(EndReason.NETWORK_ERROR)
+        fetcher.chunks = emptyList()
+
+        coordinator().scan(ScanTrigger.BACKGROUND, FakeHost, force = true)
+
+        val written = diagnostics.written.single()
+        assertEquals(ScanTrigger.BACKGROUND, written.first)
+        assertTrue(written.second.contains("status=${ScrapeStatus.FAILED_NETWORK.name}"))
+        assertTrue(written.second.contains("postsExtracted=0"))
+    }
+
+    @Test
+    fun `a cancelled scan writes what it had`() = runTest {
+        collector.gate = CompletableDeferred()
+        collector.snapshotResult = CollectResult(
+            jsonChunks = listOf(jsonChunk("333")),
+            domPosts = emptyList(),
+            end = EndReason.CANCELLED,
+            diagnostics = COLLECTOR_DIAGNOSTICS,
+        )
+        val coordinator = coordinator()
+
+        val running = launch { coordinator.scan(ScanTrigger.FOREGROUND, FakeHost, force = true) }
+        advanceUntilIdle()
+        running.cancelAndJoin()
+
+        val written = diagnostics.written.single()
+        assertEquals(ScanTrigger.FOREGROUND, written.first)
+        assertTrue(written.second.contains(COLLECTOR_DIAGNOSTICS))
+        assertTrue(written.second.contains("status=${ScrapeStatus.CANCELLED.name}"))
+    }
+
+    @Test
+    fun `a collector that sent no log still leaves a record of the scan`() = runTest {
+        collector.result = emptyResult(EndReason.NETWORK_ERROR, diagnostics = null)
+        fetcher.chunks = emptyList()
+
+        coordinator().scan(ScanTrigger.BACKGROUND, FakeHost, force = true)
+
+        val written = diagnostics.written.single()
+        assertTrue(written.second.contains("endReason=${EndReason.NETWORK_ERROR.name}"))
+    }
+
+    @Test
+    fun `a diagnostics store that throws cannot fail a scan`() = runTest {
+        diagnostics.failure = IllegalStateException("no room on the phone")
+        collector.result = webViewResult()
+
+        val outcome = coordinator().scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        assertEquals(ScrapeStatus.OK, outcome?.status)
+        assertEquals(1, store.scrapes.size)
+    }
+
     // --- cancellation ----------------------------------------------------------------------
 
     @Test
@@ -331,6 +412,7 @@ class ScanCoordinatorTest {
     }
 
     private object FakeHost : WebViewHost {
+        override val name: String = "FakeHost"
         override fun attach(webView: WebView) = Unit
         override fun detach(webView: WebView) = Unit
     }
@@ -360,5 +442,25 @@ class ScanCoordinatorTest {
             calls++
             return chunks
         }
+    }
+
+    private class FakeDiagnosticsStore : ScanDiagnosticsStore {
+        val written = mutableListOf<Pair<ScanTrigger, String>>()
+        var failure: Exception? = null
+
+        override suspend fun write(trigger: ScanTrigger, text: String) {
+            failure?.let { throw it }
+            written.add(trigger to text)
+        }
+
+        override suspend fun read(trigger: ScanTrigger): String? =
+            written.lastOrNull { it.first == trigger }?.second
+
+        override suspend fun exists(trigger: ScanTrigger): Boolean = read(trigger) != null
+    }
+
+    private companion object {
+        /** Stands in for the block `FeedCollector` builds: opaque here, and kept whole. */
+        const val COLLECTOR_DIAGNOSTICS = "host=ActivityHost\n\n{\"install\":{},\"rounds\":[]}\n"
     }
 }

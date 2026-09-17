@@ -18,6 +18,13 @@ import androidx.activity.ComponentActivity
 interface WebViewHost {
     fun attach(webView: WebView)
     fun detach(webView: WebView)
+
+    /**
+     * What this host is called, for the scan diagnostics. Spelled out rather than taken from the
+     * class name, which R8 renames to a single letter in a release build — the one build the
+     * owner ever runs.
+     */
+    val name: String
 }
 
 /** Size the collector's WebView pretends to be: a tall desktop viewport. */
@@ -48,6 +55,8 @@ class HeadlessWebView(context: Context) : WebView(context) {
  */
 class ActivityHost(private val activity: ComponentActivity) : WebViewHost {
 
+    override val name: String = "ActivityHost"
+
     override fun attach(webView: WebView) {
         val content = activity.findViewById<FrameLayout>(android.R.id.content) ?: return
         webView.layoutParams = FrameLayout.LayoutParams(COLLECTOR_WIDTH_PX, COLLECTOR_HEIGHT_PX)
@@ -68,6 +77,8 @@ class ActivityHost(private val activity: ComponentActivity) : WebViewHost {
  * design spec; [HttpLatestFetcher] is the documented fallback when it is not.
  */
 class HeadlessHost : WebViewHost {
+
+    override val name: String = "HeadlessHost"
 
     override fun attach(webView: WebView) {
         webView.layoutParams = ViewGroup.LayoutParams(COLLECTOR_WIDTH_PX, COLLECTOR_HEIGHT_PX)

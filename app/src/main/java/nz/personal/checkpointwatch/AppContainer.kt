@@ -12,8 +12,10 @@ import nz.personal.checkpointwatch.data.RoomScrapeStore
 import nz.personal.checkpointwatch.data.ScrapeDao
 import nz.personal.checkpointwatch.data.ScrapeRecorder
 import nz.personal.checkpointwatch.notify.Notifier
+import nz.personal.checkpointwatch.scan.FileScanDiagnosticsStore
 import nz.personal.checkpointwatch.scan.PostCollector
 import nz.personal.checkpointwatch.scan.ScanCoordinator
+import nz.personal.checkpointwatch.scan.ScanDiagnosticsStore
 import nz.personal.checkpointwatch.settings.SettingsStore
 
 private const val DATABASE_NAME = "checkpointwatch.db"
@@ -45,12 +47,16 @@ class AppContainer(context: Context) {
 
     private val httpLatestFetcher: HttpLatestFetcher by lazy { HttpLatestFetcher() }
 
+    /** Where each scan leaves its account of itself, for Settings to copy out. */
+    val scanDiagnostics: ScanDiagnosticsStore by lazy { FileScanDiagnosticsStore(appContext) }
+
     val scanCoordinator: ScanCoordinator by lazy {
         ScanCoordinator(
             collector = feedCollector.asPostCollector(),
             httpFetcher = { httpLatestFetcher.fetchChunks() },
             recorder = ScrapeRecorder(RoomScrapeStore(database)),
             lastFinishedAt = { database.scrapeDao().lastFinishedAt() },
+            diagnostics = scanDiagnostics,
         )
     }
 }

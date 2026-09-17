@@ -116,6 +116,21 @@ class CollectorMessageTest {
     }
 
     @Test
+    fun decode_diagMessage_returnsBody() {
+        val body = """{"install":{"href":"https://www.facebook.com/CheckpointNZ"},"rounds":[],"end":"LOGIN_WALL"}"""
+
+        val message = CollectorMessage.decode("""{"t":"diag","body":${quoted(body)}}""")
+
+        assertEquals(CollectorMessage.Diag(body), message)
+    }
+
+    @Test
+    fun decode_diagMessageWithoutBody_returnsNull() {
+        assertNull(CollectorMessage.decode("""{"t":"diag"}"""))
+        assertNull(CollectorMessage.decode("""{"t":"diag","body":{"rounds":[]}}"""))
+    }
+
+    @Test
     fun decode_unknownType_returnsNull() {
         assertNull(CollectorMessage.decode("""{"t":"screenshot","body":"x"}"""))
     }

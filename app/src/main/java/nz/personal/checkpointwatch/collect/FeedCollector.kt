@@ -94,6 +94,15 @@ private val DESKTOP_UA_METADATA: UserAgentMetadata by lazy {
  */
 private const val MAX_BUFFERED_CHARS = 4L * 1024 * 1024
 
+/**
+ * Ceiling on the collector script's diagnostic log. The script caps itself at about 40 KB; this
+ * is the backstop for a page that manages to send something larger through the bridge.
+ */
+private const val MAX_DIAG_CHARS = 64 * 1024
+
+/** How many blocked navigations the diagnostics name. After a few, the rest say nothing new. */
+private const val MAX_BLOCKED_LOGGED = 5
+
 /** How long to wait for the cookie store to confirm it is empty before giving up on the callback. */
 private const val COOKIE_CLEAR_TIMEOUT_MS = 2_000L
 
@@ -175,6 +184,70 @@ private fun String.toUriOrNull(): URI? = try {
 }
 
 /**
+ * A URL reduced to the only part of it the diagnostics are allowed to keep. Facebook puts
+ * identifiers, redirect targets and tracking parameters in query strings, and a blocked navigation
+ * is exactly the kind of URL that carries them, so everything after the path is dropped.
+ */
+internal fun hostAndPath(url: String?): String {
+    val uri = url?.toUriOrNull() ?: return "(unreadable)"
+    val host = uri.host ?: uri.scheme ?: ""
+    return (host + uri.path.orEmpty()).ifBlank { "(unreadable)" }
+}
+
+/** What [View.getWindowVisibility] meant, in the word the constant is named after. */
+private fun visibilityName(visibility: Int): String = when (visibility) {
+    View.VISIBLE -> "VISIBLE"
+    View.INVISIBLE -> "INVISIBLE"
+    View.GONE -> "GONE"
+    else -> visibility.toString()
+}
+
+/**
+ * The half of a scan's diagnostics that the collector script cannot see: which WebView ran it,
+ * where it was attached, how big it was, and what the page load itself did.
+ *
+ * Written only from the main thread, read under [FeedCollector]'s lock.
+ */
+private class ScanFacts {
+    var webView: String? = null
+    var host: String? = null
+    var documentStart: String? = null
+    var atAttach: String? = null
+    var atPageFinished: String? = null
+    var atEnd: String? = null
+    var pageFinished: Boolean = false
+    var mainFrameError: String? = null
+    var httpStatus: String? = null
+    val blocked = mutableListOf<String>()
+
+    fun blocked(url: String?) {
+        if (blocked.size >= MAX_BLOCKED_LOGGED) return
+        val stripped = hostAndPath(url)
+        if (stripped !in blocked) blocked.add(stripped)
+    }
+
+    fun fields(
+        jsonChunks: Int,
+        domPosts: Int,
+        appVersion: String,
+    ): List<Pair<String, String?>> = listOf(
+        "app" to appVersion,
+        "webView" to webView,
+        "host" to host,
+        "documentStartScript" to documentStart,
+        "sizeAtAttach" to atAttach,
+        "sizeAtPageFinished" to atPageFinished,
+        "sizeAtEnd" to atEnd,
+        "pageFinished" to pageFinished.toString(),
+        "mainFrameError" to mainFrameError,
+        "mainFrameHttpStatus" to httpStatus,
+        "blockedNavigations" to blocked.takeIf { it.isNotEmpty() }?.joinToString(", "),
+        "jsonChunks" to jsonChunks.toString(),
+        "domPosts" to domPosts.toString(),
+    )
+}
+
+/**
  * Runs one scan of the Checkpoint NZ page in a hidden WebView: loads the page with a desktop user
  * agent, lets `collector.js` close Facebook's first login dialog and scroll, and buffers the JSON
  * responses the page fetches while it does.
@@ -189,6 +262,8 @@ class FeedCollector(private val appContext: Context) {
     private var bufferedChars = 0L
     private var domPosts = emptyList<DomPost>()
     private var finalEnd: EndReason? = null
+    private var diagBody: String? = null
+    private var facts = ScanFacts()
 
     /**
      * Collects until the script says it is done, the scan times out, or the caller cancels.
@@ -218,6 +293,14 @@ class FeedCollector(private val appContext: Context) {
             jsonChunks = jsonChunks.toList(),
             domPosts = domPosts.toList(),
             end = finalEnd ?: EndReason.CANCELLED,
+            diagnostics = DiagnosticsText.document(
+                fields = facts.fields(
+                    jsonChunks = jsonChunks.size,
+                    domPosts = domPosts.size,
+                    appVersion = appVersion,
+                ),
+                json = diagBody,
+            ),
         )
     }
 
@@ -231,6 +314,11 @@ class FeedCollector(private val appContext: Context) {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             finish(EndReason.NETWORK_ERROR)
             return snapshot()
+        }
+
+        fact {
+            this.host = host.name
+            this.webView = webViewDescription()
         }
 
         clearBrowsingData()
@@ -259,11 +347,19 @@ class FeedCollector(private val appContext: Context) {
             } else {
                 documentStart = false
             }
+            fact {
+                this.documentStart = if (documentStart) {
+                    "supported, used"
+                } else {
+                    "unsupported, injected at page start instead"
+                }
+            }
             webView.webViewClient = session.CollectorClient(script, injectManually = !documentStart)
             webView.webChromeClient = session.chromeClient
             webView.setDownloadListener { _, _, _, _, _ -> /* the collector never downloads */ }
 
             host.attach(webView)
+            fact { atAttach = measure(webView) }
             webView.loadUrl(Constants.PAGE_URL)
 
             loadWatchdog = launch {
@@ -290,6 +386,10 @@ class FeedCollector(private val appContext: Context) {
         } finally {
             loadWatchdog?.cancel()
             withContext(NonCancellable) {
+                // Measured before teardown: how big the WebView ended up, and whether the system
+                // still thought it was on a visible window, is half the answer when a feed never
+                // paginated.
+                fact { atEnd = measure(webView) }
                 // One more main-loop turn before destroying anything, so that a callback which is
                 // still on the stack (or a posted completion) is well clear of the WebView.
                 yield()
@@ -306,11 +406,52 @@ class FeedCollector(private val appContext: Context) {
     private fun addBridge(webView: WebView, listener: WebViewCompat.WebMessageListener) =
         WebViewCompat.addWebMessageListener(webView, BRIDGE_NAME, setOf(FACEBOOK_ORIGIN), listener)
 
+    /** The app's own version, for the diagnostics; read once, and never worth failing a scan. */
+    private val appVersion: String by lazy {
+        try {
+            appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName.orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /** Which WebView implementation is actually running the page on this phone, and its version. */
+    private fun webViewDescription(): String = try {
+        WebViewCompat.getCurrentWebViewPackage(appContext)
+            ?.let { "${it.packageName} ${it.versionName.orEmpty()}".trim() }
+            ?: "unknown"
+    } catch (_: Exception) {
+        "unknown"
+    }
+
+    /** How big the WebView is right now, and whether the system believes anyone can see it. */
+    private fun measure(webView: WebView): String = try {
+        "${webView.width}x${webView.height}px attached=${webView.isAttachedToWindow} " +
+            "windowVisibility=${visibilityName(webView.windowVisibility)}"
+    } catch (_: Exception) {
+        "unavailable"
+    }
+
+    /** Records one fact. Never lets the diagnostics cost the scan anything. */
+    private fun fact(block: ScanFacts.() -> Unit) {
+        try {
+            synchronized(lock) { facts.block() }
+        } catch (_: Exception) {
+            // ignore: a missing line of diagnostics is not a reason to fail a scan
+        }
+    }
+
+    private fun setDiag(body: String) = synchronized(lock) {
+        diagBody = if (body.length > MAX_DIAG_CHARS) body.substring(0, MAX_DIAG_CHARS) else body
+    }
+
     private fun reset() = synchronized(lock) {
         jsonChunks.clear()
         bufferedChars = 0
         domPosts = emptyList()
         finalEnd = null
+        diagBody = null
+        facts = ScanFacts()
     }
 
     private fun finish(reason: EndReason) = synchronized(lock) {
@@ -519,6 +660,7 @@ class FeedCollector(private val appContext: Context) {
                 if (request?.isForMainFrame != true) return false
                 val url = request.url?.toString()
                 if (isAllowedNavigation(url)) return false
+                fact { blocked(url) }
                 if (endsScanAsBlocked(url)) endWith(EndReason.BLOCKED)
                 return true
             }
@@ -529,6 +671,10 @@ class FeedCollector(private val appContext: Context) {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 progressed = true
+                fact {
+                    pageFinished = true
+                    if (atPageFinished == null && view != null) atPageFinished = measure(view)
+                }
                 if (injectManually) view?.evaluateJavascript(script, null)
             }
 
@@ -537,7 +683,15 @@ class FeedCollector(private val appContext: Context) {
                 request: WebResourceRequest?,
                 error: WebResourceError?,
             ) {
-                if (request?.isForMainFrame == true) endWith(EndReason.NETWORK_ERROR)
+                if (request?.isForMainFrame != true) return
+                fact {
+                    if (mainFrameError == null) {
+                        mainFrameError = runCatching {
+                            "${error?.errorCode} ${error?.description}"
+                        }.getOrDefault("unreadable")
+                    }
+                }
+                endWith(EndReason.NETWORK_ERROR)
             }
 
             override fun onReceivedHttpError(
@@ -545,22 +699,25 @@ class FeedCollector(private val appContext: Context) {
                 request: WebResourceRequest?,
                 errorResponse: WebResourceResponse?,
             ) {
+                if (request?.isForMainFrame != true) return
+                val status = errorResponse?.statusCode ?: 0
+                fact { if (httpStatus == null) httpStatus = status.toString() }
                 // Facebook answering a main-frame request with 4xx/5xx is it refusing us, not the
                 // network failing: recorded as BLOCKED so the scrape log tells the two apart.
-                if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 0) >= 400) {
-                    endWith(EndReason.BLOCKED)
-                }
+                if (status >= 400) endWith(EndReason.BLOCKED)
             }
 
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                 // Cancel first: ending the scan tears the WebView down, and the handler belongs to it.
                 handler?.cancel()
+                fact { if (mainFrameError == null) mainFrameError = "SSL error" }
                 endWith(EndReason.NETWORK_ERROR)
             }
 
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 // Returning true keeps the app alive. The WebView is unusable from here, so it is
                 // detached and destroyed at once and a fresh one is built for the next scan.
+                fact { if (mainFrameError == null) mainFrameError = "render process gone" }
                 endWith(EndReason.NETWORK_ERROR)
                 teardown()
                 return true
@@ -588,6 +745,7 @@ class FeedCollector(private val appContext: Context) {
                     pendingDump?.complete(Unit)
                 }
                 is CollectorMessage.End -> endWith(decoded.reason)
+                is CollectorMessage.Diag -> setDiag(decoded.body)
                 null -> Unit // Unrecognised payload: ignored, never fatal.
             }
         }

@@ -30,11 +30,16 @@ enum class EndReason {
  * Everything one scan captured. [jsonChunks] are raw response bodies (GraphQL responses and the
  * initial `<script type="application/json">` blocks) for [FeedJsonExtractor]; [domPosts] is the
  * scraped-from-the-page fallback used only when the JSON yields nothing.
+ *
+ * [diagnostics] is the human-readable account of how the scan went — what the WebView was, what
+ * the page did, why it stopped — for the owner to copy out of the app when a scan is puzzling.
+ * It holds no personal data and nothing the app depends on: it exists to be read by a person.
  */
 data class CollectResult(
     val jsonChunks: List<String>,
     val domPosts: List<DomPost>,
     val end: EndReason,
+    val diagnostics: String? = null,
 )
 
 /**
@@ -55,6 +60,13 @@ sealed interface CollectorMessage {
     /** The collector script has finished; no further messages are expected. */
     data class End(val reason: EndReason) : CollectorMessage
 
+    /**
+     * The script's own account of the scan: a JSON string, sent once just before [End] (or from
+     * its last-chance dump). Never parsed here — it is evidence for a person to read, and the
+     * less this app pretends to understand it, the more of it survives a Facebook change.
+     */
+    data class Diag(val body: String) : CollectorMessage
+
     companion object {
 
         private val json = Json { ignoreUnknownKeys = true }
@@ -71,6 +83,7 @@ sealed interface CollectorMessage {
                 "json" -> root.stringOrNull("body")?.let(::JsonChunk)
                 "dom" -> (root["posts"] as? JsonArray)?.let { Dom(it.toDomPosts()) }
                 "end" -> End(endReason(root.stringOrNull("reason")))
+                "diag" -> root.stringOrNull("body")?.let(::Diag)
                 else -> null
             }
         }
