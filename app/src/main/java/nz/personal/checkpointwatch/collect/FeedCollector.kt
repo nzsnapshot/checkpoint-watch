@@ -67,6 +67,13 @@ private const val MAX_BUFFERED_CHARS = 4L * 1024 * 1024
 /** How long to wait for the cookie store to confirm it is empty before giving up on the callback. */
 private const val COOKIE_CLEAR_TIMEOUT_MS = 2_000L
 
+/** How long to wait for the script's last-chance DOM dump after the scan times out. */
+private const val DOM_DUMP_TIMEOUT_MS = 500L
+
+/** Asks `collector.js` for the DOM fallback without ending it; a no-op if the script never ran. */
+private const val DOM_DUMP_JS = "window.__cwDump && window.__cwDump()"
+
+
 /**
  * Path roots of Facebook's sign-in flows. Each matches on its own, with a `.php` suffix (the form
  * Facebook actually redirects logged-out visitors to), or as a path segment with more after it.
@@ -234,7 +241,14 @@ class FeedCollector(private val appContext: Context) {
                 if (!session.progressed) session.endWith(EndReason.NETWORK_ERROR)
             }
 
-            finish(withTimeoutOrNull(SCAN_TIMEOUT_MS) { done.await() } ?: EndReason.TIMEOUT)
+            val reason = withTimeoutOrNull(SCAN_TIMEOUT_MS) { done.await() }
+            if (reason == null) {
+                // Timed out before the script finished, so it never sent its `dom` message. Ask for
+                // one now: on a slow page that is the difference between the DOM fallback and
+                // nothing at all.
+                session.requestDomDump()
+            }
+            finish(reason ?: EndReason.TIMEOUT)
             return snapshot()
         } catch (e: CancellationException) {
             throw e
@@ -380,6 +394,9 @@ class FeedCollector(private val appContext: Context) {
 
         private var tornDown = false
 
+        /** Set while [requestDomDump] is waiting; completed by the `dom` message it asked for. */
+        private var pendingDump: CompletableDeferred<Unit>? = null
+
         val messageListener =
             WebViewCompat.WebMessageListener { _, message, sourceOrigin, isMainFrame, _ ->
                 if (isMainFrame && isFacebookOrigin(sourceOrigin)) onMessage(message)
@@ -491,7 +508,10 @@ class FeedCollector(private val appContext: Context) {
             val raw = runCatching { message.data }.getOrNull() ?: return
             when (val decoded = CollectorMessage.decode(raw)) {
                 is CollectorMessage.JsonChunk -> addChunk(decoded.body)
-                is CollectorMessage.Dom -> setDomPosts(decoded.posts)
+                is CollectorMessage.Dom -> {
+                    setDomPosts(decoded.posts)
+                    pendingDump?.complete(Unit)
+                }
                 is CollectorMessage.End -> endWith(decoded.reason)
                 null -> Unit // Unrecognised payload: ignored, never fatal.
             }
@@ -500,6 +520,22 @@ class FeedCollector(private val appContext: Context) {
         private fun isFacebookOrigin(origin: Uri): Boolean =
             origin.scheme.equals("https", ignoreCase = true) &&
                 origin.host.equals("www.facebook.com", ignoreCase = true)
+
+        /**
+         * Best effort, on the main thread: ask the script to post its DOM posts and wait briefly
+         * for them. Does nothing once the WebView is gone, and never fails the scan.
+         */
+        suspend fun requestDomDump() {
+            if (tornDown) return
+            val waiter = CompletableDeferred<Unit>()
+            pendingDump = waiter
+            try {
+                val asked = runCatching { webView.evaluateJavascript(DOM_DUMP_JS, null) }.isSuccess
+                if (asked) withTimeoutOrNull(DOM_DUMP_TIMEOUT_MS) { waiter.await() }
+            } finally {
+                pendingDump = null
+            }
+        }
 
         /** Safe to call twice: [onRenderProcessGone] and the scan's `finally` both call it. */
         fun teardown() {

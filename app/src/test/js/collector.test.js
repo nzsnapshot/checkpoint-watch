@@ -108,4 +108,25 @@ check('dialogDecision survives rubbish input', function () {
   assert.strictEqual(collector.dialogDecision([null, undefined, {}]), 'none');
 });
 
+check('shouldEndOnWall: never without a wall this round', function () {
+  assert.strictEqual(collector.shouldEndOnWall(0, true), false);
+  assert.strictEqual(collector.shouldEndOnWall(0, false), false);
+  assert.strictEqual(collector.shouldEndOnWall(undefined, true), false);
+});
+
+check('shouldEndOnWall: two rounds are enough once posts have been seen', function () {
+  assert.strictEqual(collector.shouldEndOnWall(1, true), false);
+  assert.strictEqual(collector.shouldEndOnWall(2, true), true);
+  assert.strictEqual(collector.shouldEndOnWall(5, true), true);
+});
+
+check('shouldEndOnWall: an empty feed gets far longer than the stall floor', function () {
+  // ~12 s, so a dialog whose Close button has not rendered yet cannot end an empty scan early.
+  [1, 2, 3, 4, 5, 6, 7].forEach(function (rounds) {
+    assert.strictEqual(collector.shouldEndOnWall(rounds, false), false, 'round ' + rounds);
+  });
+  assert.strictEqual(collector.shouldEndOnWall(8, false), true);
+  assert.strictEqual(collector.shouldEndOnWall(9, false), true);
+});
+
 console.log('\n' + passed + ' checks passed');

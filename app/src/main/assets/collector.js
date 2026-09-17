@@ -45,14 +45,23 @@
   var MAX_ROUNDS = 24; // 24 x 1.5 s ~ 36 s, inside Kotlin's 45 s scan budget
   var STALL_ROUNDS = 3;
   var MIN_ROUNDS_BEFORE_EMPTY_STOP = 10; // never give up on an empty feed in the first ~15 s
-  var WALL_ROUNDS = 3; // a closeless dialog before any post must persist this long to be the wall
+  // How long a closeless sign-in dialog must persist before it is believed to be the hard wall:
+  // quickly once posts have been seen, patiently while the page is still settling.
+  var WALL_ROUNDS_AFTER_POSTS = 2;
+  var WALL_ROUNDS_BEFORE_POSTS = 8;
+  // The script's own wall clock. Kotlin's 45 s budget starts at loadUrl and this starts at document
+  // start, so finishing at 38 s leaves room for the page load and still delivers the DOM fallback
+  // (which is only ever sent from finish()) before Kotlin gives up.
+  var MAX_ELAPSED_MS = 38000;
   var MAX_FAILED_ROUNDS = 5;
   var MAX_DOM_POSTS = 40;
   var MAX_DOM_TEXT = 20000;
   var MAX_AGE_TEXT = 16;
   var POST_ID = '"post_id"';
 
+  var startedAt = Date.now();
   var ended = false;
+  var dumped = false;
   var queue = [];
   var queuedChars = 0;
   var flushTimer = null;
@@ -281,10 +290,24 @@
         return true;
       }
       var text = (dialog.innerText || '').toLowerCase();
-      return text.indexOf('log in') !== -1 || text.indexOf('log into') !== -1 || text.indexOf('sign up') !== -1;
+      return text.indexOf('log in') !== -1 || text.indexOf('sign up') !== -1;
     } catch (e) {
       return false;
     }
+  }
+
+  /**
+   * Pure: has a closeless sign-in dialog been up long enough to call it the hard login wall?
+   *
+   * After the feed has produced posts this is the expected end of a scan, so two rounds are enough.
+   * Before any post it is far more likely to be the page still settling (or a dialog whose Close
+   * button has not rendered yet), so it has to persist much longer than the stall floor.
+   */
+  function shouldEndOnWall(wallRounds, sawArticlesYet) {
+    if (!(wallRounds > 0)) {
+      return false;
+    }
+    return wallRounds >= (sawArticlesYet ? WALL_ROUNDS_AFTER_POSTS : WALL_ROUNDS_BEFORE_POSTS);
   }
 
   /**
@@ -517,6 +540,25 @@
     }
   }
 
+  /**
+   * Ships the DOM fallback without ending the scan. Kotlin calls this through window.__cwDump when
+   * its own timeout fires, so a page that loaded too slowly for the loop to finish still yields the
+   * posts it did render. Sends at most one dump, and nothing at all once finish() has sent its own.
+   */
+  function dump() {
+    try {
+      if (ended || dumped) {
+        return;
+      }
+      dumped = true;
+      sendScriptBlocks();
+      send({ t: 'dom', posts: domPosts() });
+      flush();
+    } catch (e) {
+      // ignore
+    }
+  }
+
   function finish(reason) {
     if (ended) {
       return;
@@ -537,16 +579,20 @@
     try {
       rounds++;
 
+      // The script's own budget, so the DOM fallback is always sent before Kotlin's clock runs out.
+      if (Date.now() - startedAt >= MAX_ELAPSED_MS) {
+        finish('TIMEOUT');
+        return;
+      }
+
       var dialogState = handleDialogs();
       var articles = topLevelArticles();
       if (articles.length > 0) {
         sawArticles = true;
       }
 
-      // A closeless sign-in dialog is the terminal wall once posts have been seen. Before any post
-      // it may just be the page still settling, so it has to persist for a few rounds.
       wallRounds = dialogState === 'wall' ? wallRounds + 1 : 0;
-      if (wallRounds > 0 && (sawArticles || wallRounds >= WALL_ROUNDS)) {
+      if (shouldEndOnWall(wallRounds, sawArticles)) {
         finish('LOGIN_WALL');
         return;
       }
@@ -599,6 +645,13 @@
   }
 
   try {
+    // The one hook Kotlin calls into: a last-chance DOM dump when its own timeout fires.
+    window.__cwDump = dump;
+  } catch (e) {
+    // ignore
+  }
+
+  try {
     if (document.readyState === 'interactive' || document.readyState === 'complete') {
       start();
     } else {
@@ -609,9 +662,15 @@
     // not a browser: nothing to start
   }
 
+  // Only ever outside a browser (node, for the tests). A page that happens to define window.module
+  // must never have its exports overwritten by us.
   try {
-    if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { isAgeText: isAgeText, dialogDecision: dialogDecision };
+    if (!IN_BROWSER && typeof module !== 'undefined' && module.exports) {
+      module.exports = {
+        isAgeText: isAgeText,
+        dialogDecision: dialogDecision,
+        shouldEndOnWall: shouldEndOnWall
+      };
     }
   } catch (e) {
     // ignore
