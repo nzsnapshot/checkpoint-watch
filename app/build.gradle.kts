@@ -68,6 +68,8 @@ dependencies {
 
     implementation(libs.activity.compose)
     implementation(libs.lifecycle.runtime.ktx)
+    // collectAsStateWithLifecycle: a StateFlow the screen stops collecting while it is stopped.
+    implementation(libs.lifecycle.runtime.compose)
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.navigation.compose)
 
