@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/index.js",
     "once": "node src/index.js --once",
-    "test": "node --test test/"
+    "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
     "playwright": "^1.47.0"

@@ -48,6 +48,7 @@ if (-not (Test-Path -LiteralPath $Entry)) {
 
 Add-Content -LiteralPath $LogFile -Value ($stamp + ' starting the collector')
 
-& $NodeCommand.Source $Entry *>> $LogFile
+# Out-File rather than *>>: in Windows PowerShell 5.1 the redirection operator writes UTF-16.
+& $NodeCommand.Source $Entry 2>&1 | ForEach-Object { "$_" } | Out-File -LiteralPath $LogFile -Append -Encoding utf8
 
 exit $LASTEXITCODE

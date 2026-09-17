@@ -128,10 +128,13 @@ function writeRuntime(value) {
   }
 }
 
+/**
+ * The timer stays ref'd on purpose: between cycles it is the only thing keeping the event loop
+ * alive, and an unref'd timer lets Node exit cleanly mid-sleep as if the service had finished.
+ */
 function sleep(ms) {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
-    if (typeof timer.unref === 'function') timer.unref();
     wakeUp = () => {
       clearTimeout(timer);
       resolve();
