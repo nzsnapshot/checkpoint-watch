@@ -138,6 +138,159 @@ class DomPostExtractorTest {
         assertEquals(Constants.PAGE_URL, posts[0].url)
     }
 
+    // --- the chrome around the post ----------------------------------------------------------
+    //
+    // innerText of a Facebook article is the post plus everything drawn around it: the page's
+    // name, the relative age, the reaction counts, the action buttons. Those change between
+    // scans, so an uncleaned text hash changes with them — the same post reads as a new one every
+    // scan (duplicate rows, duplicate notifications) and can never bridge onto the JSON feed's
+    // `message.text`. Cleaning has to land on exactly the text the JSON carries.
+
+    /** A realistic article, as innerText renders it, around the first fixture post. */
+    private val noisyArticle = """
+        Online status indicator
+        Active
+        Checkpoint Watch Auckland
+        22m
+        ·
+        🛑 CHECKPOINT – Lincoln Road, HENDERSON
+        After the off-ramp coming from the motorway
+        Time: 11:55PM
+        All reactions:
+        8
+        1
+        Like
+        Comment
+        Share
+    """.trimIndent()
+
+    /** The same post's `message.text`, straight out of the captured GraphQL response. */
+    private fun fixturePostText(): String =
+        FeedJsonExtractor.extract(listOf(javaClass.getResource("/fixtures/graphql_1.txt")!!.readText()))
+            .first { it.postId == "1614130810501801" }
+            .text
+
+    @Test
+    fun cleanText_stripsTheHeaderAndFooterChromeDownToTheMessage() {
+        assertEquals(fixturePostText(), DomPostExtractor.cleanText(noisyArticle))
+    }
+
+    @Test
+    fun cleanText_makesTheDomHashMatchTheJsonHash() {
+        assertEquals(
+            DomPostExtractor.textHash(fixturePostText()),
+            DomPostExtractor.textHash(DomPostExtractor.cleanText(noisyArticle)),
+        )
+    }
+
+    @Test
+    fun extract_cleansTheTextItStoresAndHashes() {
+        val posts = DomPostExtractor.extract(listOf(DomPost(noisyArticle, "22m", null)), scanTime)
+
+        assertEquals(fixturePostText(), posts.single().text)
+    }
+
+    @Test
+    fun cleanText_dropsTrailingCountsAndCommentAndShareLines() {
+        val cleaned = DomPostExtractor.cleanText(
+            """
+            🛑 CHECKPOINT – Trig Road
+            At the top
+            All reactions:
+            1.2K
+            See more
+            12 comments
+            3 shares
+            Like
+            Comment
+            Share
+            """.trimIndent(),
+        )
+
+        assertEquals("🛑 CHECKPOINT – Trig Road\nAt the top", cleaned)
+    }
+
+    @Test
+    fun cleanText_leavesAHeaderlessPostAloneApartFromItsChrome() {
+        val cleaned = DomPostExtractor.cleanText("Checkpoint Watch Auckland\n22m\nRoads are clear tonight\nLike\nShare")
+
+        assertEquals("Checkpoint Watch Auckland\n22m\nRoads are clear tonight", cleaned)
+    }
+
+    @Test
+    fun cleanText_neverReturnsNothing() {
+        assertEquals("Like\nComment\nShare", DomPostExtractor.cleanText("Like\nComment\nShare"))
+    }
+
+    // --- links --------------------------------------------------------------------------------
+
+    @Test
+    fun extract_url_rejectsLinksThatArentFacebookOverHttps() {
+        val rejected = listOf(
+            "http://www.facebook.com/CheckpointNZ/posts/1",
+            "https://facebook.com.example.com/posts/1",
+            "https://evil.example/posts/1",
+            "javascript:alert(1)",
+            "not a url at all",
+        )
+
+        rejected.forEach { link ->
+            val posts = DomPostExtractor.extract(listOf(DomPost("checkpoint on Queen St", "5m", link)), scanTime)
+            assertEquals(link, Constants.PAGE_URL, posts.single().url)
+        }
+    }
+
+    @Test
+    fun extract_url_keepsFacebookHostsAndSubdomains() {
+        val kept = listOf(
+            "https://www.facebook.com/CheckpointNZ/posts/1",
+            "https://facebook.com/CheckpointNZ/posts/1",
+            "https://m.facebook.com/CheckpointNZ/posts/1",
+        )
+
+        kept.forEach { link ->
+            val posts = DomPostExtractor.extract(listOf(DomPost("checkpoint on Queen St", "5m", link)), scanTime)
+            assertEquals(link, link, posts.single().url)
+        }
+    }
+
+    // --- the ages Facebook actually renders ---------------------------------------------------
+
+    @Test
+    fun extract_secondsAge_isTreatedAsNow() {
+        val posts = DomPostExtractor.extract(
+            listOf(
+                DomPost("checkpoint a", "45s", null),
+                DomPost("checkpoint b", "30 secs", null),
+            ),
+            scanTime,
+        )
+
+        posts.forEach { assertEquals(scanTime, it.createdAt) }
+    }
+
+    @Test
+    fun extract_weeksAge_parsedShortAndLongForm() {
+        val posts = DomPostExtractor.extract(
+            listOf(DomPost("checkpoint a", "1w", null), DomPost("checkpoint b", "2 weeks", null)),
+            scanTime,
+        )
+
+        assertEquals(scanTime.minus(7, ChronoUnit.DAYS), posts[0].createdAt)
+        assertEquals(scanTime.minus(14, ChronoUnit.DAYS), posts[1].createdAt)
+    }
+
+    @Test
+    fun extract_yearsAge_parsedShortAndLongForm() {
+        val posts = DomPostExtractor.extract(
+            listOf(DomPost("checkpoint a", "1y", null), DomPost("checkpoint b", "2 yrs", null)),
+            scanTime,
+        )
+
+        assertEquals(scanTime.minus(365, ChronoUnit.DAYS), posts[0].createdAt)
+        assertEquals(scanTime.minus(730, ChronoUnit.DAYS), posts[1].createdAt)
+    }
+
     @Test
     fun extract_age_caseInsensitive_hoursShortForm() {
         val posts = DomPostExtractor.extract(

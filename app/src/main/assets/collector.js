@@ -15,8 +15,9 @@
  * Plain ES2017, no page globals other than the two install guards, everything in try/catch: a
  * throw here would be a scan that silently collects nothing.
  *
- * The pure decision helpers (isAgeText, dialogDecision) are exported when this file is loaded by
- * node, so they can be tested without a browser: see app/src/test/js/collector.test.js.
+ * The pure decision helpers (isAgeText, dialogDecision, shouldEndOnWall, shouldStopOnStall,
+ * pickPostText) are exported when this file is loaded by node, so they can be tested without a
+ * browser: see app/src/test/js/collector.test.js.
  */
 (function () {
   'use strict';
@@ -43,7 +44,9 @@
   var MAX_QUEUED_CHARS = 6 * 1024 * 1024; // pre-bridge queue, bounded by size rather than count
   var ROUND_MS = 1500;
   var MAX_ROUNDS = 24; // 24 x 1.5 s ~ 36 s, inside Kotlin's 45 s scan budget
-  var STALL_ROUNDS = 3;
+  // Four rounds (~6 s) of no new article before the feed counts as finished. Three (~4.5 s) is
+  // too quick on mobile data, where the next batch of posts is often still in flight.
+  var STALL_ROUNDS = 4;
   var MIN_ROUNDS_BEFORE_EMPTY_STOP = 10; // never give up on an empty feed in the first ~15 s
   // How long a closeless sign-in dialog must persist before it is believed to be the hard wall:
   // quickly once posts have been seen, patiently while the page is still settling.
@@ -311,6 +314,20 @@
   }
 
   /**
+   * Pure: has the feed stopped growing for long enough to call it finished?
+   *
+   * An empty feed is not a finished feed: until a single article has rendered, the stall counter
+   * says nothing, so the page gets MIN_ROUNDS_BEFORE_EMPTY_STOP rounds before "no change" is
+   * allowed to mean anything at all.
+   */
+  function shouldStopOnStall(stalled, sawArticlesYet, rounds) {
+    if (!sawArticlesYet && !(rounds >= MIN_ROUNDS_BEFORE_EMPTY_STOP)) {
+      return false;
+    }
+    return stalled >= STALL_ROUNDS;
+  }
+
+  /**
    * Pure decision over the facts gathered from every dialog on the page.
    * facts: [{ visible: boolean, hasClose: boolean, loginSignal: boolean }]
    * Returns 'closed' (something was closable), 'wall' (only a closeless sign-in dialog), 'none'.
@@ -502,13 +519,47 @@
     return null;
   }
 
+  // Where Facebook puts the text the author actually wrote, inside all the article's chrome.
+  var MESSAGE_SELECTOR =
+    '[data-ad-preview="message"], [data-ad-comet-preview="message"], ' +
+    '[data-ad-rendering-role="story_message"]';
+
+  /**
+   * Pure: the post's own text if the message element gave us one, else the whole article.
+   *
+   * The article's innerText is the post plus the page name, the age, the reaction counts and the
+   * Like/Comment/Share row — noise that changes between scans, so it changes the text hash and
+   * stops the post ever bridging onto the JSON feed's message.text. Kotlin cleans what it is
+   * given (DomPostExtractor.cleanText); this is the cheaper first cut, when the page tells us.
+   */
+  function pickPostText(messageText, articleText) {
+    var message = typeof messageText === 'string' ? messageText.trim() : '';
+    if (message.length > 0) {
+      return message;
+    }
+    return typeof articleText === 'string' ? articleText.trim() : '';
+  }
+
+  function articleText(article) {
+    var message = '';
+    try {
+      var node = article.querySelector(MESSAGE_SELECTOR);
+      if (node) {
+        message = node.innerText || '';
+      }
+    } catch (e) {
+      message = '';
+    }
+    return pickPostText(message, article.innerText || '');
+  }
+
   function domPosts() {
     var posts = [];
     try {
       var articles = topLevelArticles();
       for (var i = 0; i < articles.length && posts.length < MAX_DOM_POSTS; i++) {
         try {
-          var text = (articles[i].innerText || '').trim();
+          var text = articleText(articles[i]);
           if (!text) {
             continue;
           }
@@ -607,10 +658,7 @@
         lastCount = articles.length;
       }
 
-      // An empty feed is not a finished feed: never stop on "no change" until a post has been seen
-      // or the page has had a fair go at loading one.
-      var mayStopOnStall = sawArticles || rounds >= MIN_ROUNDS_BEFORE_EMPTY_STOP;
-      if ((mayStopOnStall && stalled >= STALL_ROUNDS) || rounds >= MAX_ROUNDS) {
+      if (shouldStopOnStall(stalled, sawArticles, rounds) || rounds >= MAX_ROUNDS) {
         finish('NO_MORE_POSTS');
         return;
       }
@@ -669,7 +717,9 @@
       module.exports = {
         isAgeText: isAgeText,
         dialogDecision: dialogDecision,
-        shouldEndOnWall: shouldEndOnWall
+        shouldEndOnWall: shouldEndOnWall,
+        shouldStopOnStall: shouldStopOnStall,
+        pickPostText: pickPostText
       };
     }
   } catch (e) {

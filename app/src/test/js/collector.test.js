@@ -129,4 +129,43 @@ check('shouldEndOnWall: an empty feed gets far longer than the stall floor', fun
   assert.strictEqual(collector.shouldEndOnWall(9, false), true);
 });
 
+check('shouldStopOnStall: an empty feed is never given up on early', function () {
+  // Nothing has rendered yet: the stall counter must not end the scan until the page has had
+  // MIN_ROUNDS_BEFORE_EMPTY_STOP (10) rounds to produce a first article.
+  [1, 2, 3, 4, 5, 9].forEach(function (rounds) {
+    assert.strictEqual(collector.shouldStopOnStall(8, false, rounds), false, 'round ' + rounds);
+  });
+  assert.strictEqual(collector.shouldStopOnStall(4, false, 10), true);
+});
+
+check('shouldStopOnStall: four stalled rounds, not three, once articles are on the page', function () {
+  // ~6 s of no new articles. Three (~4.5 s) is too quick on mobile data: the next batch of posts
+  // is often still in flight, and giving up there costs the scan its older half.
+  assert.strictEqual(collector.shouldStopOnStall(2, true, 4), false);
+  assert.strictEqual(collector.shouldStopOnStall(3, true, 4), false);
+  assert.strictEqual(collector.shouldStopOnStall(4, true, 4), true);
+  assert.strictEqual(collector.shouldStopOnStall(9, true, 9), true);
+});
+
+check('pickPostText prefers the message element over the whole article', function () {
+  assert.strictEqual(
+    collector.pickPostText('CHECKPOINT - Lincoln Road', 'Checkpoint Watch Auckland\n22m\nCHECKPOINT - Lincoln Road\nLike'),
+    'CHECKPOINT - Lincoln Road'
+  );
+});
+
+check('pickPostText falls back to the article when there is no message element', function () {
+  var article = 'Checkpoint Watch Auckland\n22m\nCHECKPOINT - Lincoln Road';
+  assert.strictEqual(collector.pickPostText('', article), article);
+  assert.strictEqual(collector.pickPostText('   ', article), article);
+  assert.strictEqual(collector.pickPostText(null, article), article);
+  assert.strictEqual(collector.pickPostText(undefined, article), article);
+});
+
+check('pickPostText trims, and survives rubbish', function () {
+  assert.strictEqual(collector.pickPostText('  message  ', 'article'), 'message');
+  assert.strictEqual(collector.pickPostText(null, null), '');
+  assert.strictEqual(collector.pickPostText(42, 7), '');
+});
+
 console.log('\n' + passed + ' checks passed');
