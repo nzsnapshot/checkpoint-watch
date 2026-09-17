@@ -132,6 +132,7 @@ object ScanHistoryUi {
     fun endReasonLabel(reason: EndReason): Int = when (reason) {
         EndReason.LOGIN_WALL -> R.string.end_login_wall
         EndReason.NO_MORE_POSTS -> R.string.end_no_more_posts
+        EndReason.NO_FEED -> R.string.end_no_feed
         EndReason.TIMEOUT -> R.string.end_timeout
         EndReason.NETWORK_ERROR -> R.string.end_network_error
         EndReason.BLOCKED -> R.string.end_blocked

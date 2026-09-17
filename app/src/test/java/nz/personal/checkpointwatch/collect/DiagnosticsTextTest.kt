@@ -50,4 +50,47 @@ class DiagnosticsTextTest {
         assertTrue(text.contains(DiagnosticsText.NO_LOG))
         assertFalse(text.contains("null"))
     }
+
+    @Test
+    fun document_addsASecondBlockForTheSecondPass() {
+        // A starved scan is two scans, and the question "why did the fallback bring back five
+        // posts?" is answered by the second half, which has its own install facts and its own log.
+        val text = DiagnosticsText.document(
+            fields = listOf("end" to "NO_FEED"),
+            json = """{"rounds":[]}""",
+            plugin = DiagnosticsText.Block(
+                fields = listOf("pluginMs" to "4200", "pluginPosts" to "5"),
+                json = """{"seen":{"posts":5}}""",
+            ),
+        )
+
+        assertEquals(
+            "end=NO_FEED\n\n{\"rounds\":[]}\n" +
+                "\n${DiagnosticsText.PLUGIN_HEADING}\n" +
+                "pluginMs=4200\npluginPosts=5\n" +
+                "\n{\"seen\":{\"posts\":5}}\n",
+            text,
+        )
+    }
+
+    @Test
+    fun document_withoutASecondPass_isExactlyWhatItWasBefore() {
+        val json = """{"rounds":[]}"""
+
+        assertEquals(
+            DiagnosticsText.document(listOf("end" to "LOGIN_WALL"), json),
+            DiagnosticsText.document(listOf("end" to "LOGIN_WALL"), json, plugin = null),
+        )
+    }
+
+    @Test
+    fun document_secondBlockNamesItsOwnMissingLog() {
+        val text = DiagnosticsText.document(
+            fields = listOf("end" to "NO_FEED"),
+            json = null,
+            plugin = DiagnosticsText.Block(fields = listOf("pluginPosts" to "0"), json = null),
+        )
+
+        assertEquals(2, Regex(Regex.escape(DiagnosticsText.NO_LOG)).findAll(text).count())
+    }
 }

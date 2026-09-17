@@ -97,6 +97,37 @@ class NavigationGuardTest {
         assertFalse(looksLikeLoginRedirect("https://www.facebook.com/registry"))
     }
 
+    // --- the page widget, which only the second pass is allowed to load -------------------
+
+    @Test
+    fun isPluginNavigation_allowsExactlyThePagePlugin() {
+        assertTrue(isPluginNavigation(Constants.PLUGIN_URL))
+        assertTrue(isPluginNavigation("https://www.facebook.com/plugins/page.php"))
+        assertTrue(isPluginNavigation("https://www.facebook.com/plugins/page.php?href=x&tabs=timeline"))
+        assertTrue(isPluginNavigation("https://www.facebook.com/plugins/page.php/"))
+    }
+
+    @Test
+    fun isPluginNavigation_refusesEveryOtherPlugin_hostAndScheme() {
+        assertFalse(isPluginNavigation("https://www.facebook.com/plugins/post.php"))
+        assertFalse(isPluginNavigation("https://www.facebook.com/plugins/like.php"))
+        assertFalse(isPluginNavigation("https://www.facebook.com/plugins/page.php/extra"))
+        assertFalse(isPluginNavigation("https://web.facebook.com/plugins/page.php"))
+        assertFalse(isPluginNavigation("https://www.facebook.com.evil.example/plugins/page.php"))
+        assertFalse(isPluginNavigation("http://www.facebook.com/plugins/page.php"))
+        assertFalse(isPluginNavigation(Constants.PAGE_URL))
+        assertFalse(isPluginNavigation(null))
+        assertFalse(isPluginNavigation(""))
+        assertFalse(isPluginNavigation("::::"))
+    }
+
+    @Test
+    fun theWidgetIsNotAnAllowedNavigationOnItsOwn() {
+        // Only the second pass opens it, and only by asking for it explicitly. Nothing on the page
+        // itself may navigate there.
+        assertFalse(isAllowedNavigation(Constants.PLUGIN_URL))
+    }
+
     @Test
     fun isFacebookHost_matchesTheSiteAndItsSubdomains() {
         assertTrue(isFacebookHost("www.facebook.com"))

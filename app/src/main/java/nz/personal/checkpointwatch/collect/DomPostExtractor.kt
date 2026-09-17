@@ -126,8 +126,11 @@ object DomPostExtractor {
      * page's own markup, so it is untrusted input: anything else (another host, plain http, a
      * `javascript:` URL, a string that is not a URL at all) is replaced by the page URL, which is
      * where "Open on Facebook" then takes the owner.
+     *
+     * Shared with [PluginPostExtractor], whose links come out of the page widget's markup and are
+     * exactly as untrustworthy.
      */
-    private fun safeLink(link: String?): String? {
+    internal fun safeLink(link: String?): String? {
         if (link.isNullOrBlank()) return null
         val uri = runCatching { URI(link) }.getOrNull() ?: return null
         if (!"https".equals(uri.scheme, ignoreCase = true)) return null

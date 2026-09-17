@@ -53,12 +53,20 @@ private const val FACEBOOK_ORIGIN = "https://www.facebook.com"
 private const val BRIDGE_NAME = "cwBridge"
 
 private const val ASSET_COLLECTOR_JS = "collector.js"
+private const val ASSET_PLUGIN_COLLECTOR_JS = "plugin_collector.js"
 
 /** No page load and no message within this long means the network is not cooperating. */
 private const val PAGE_LOAD_TIMEOUT_MS = 20_000L
 
-/** Hard ceiling on a whole scan; whatever was captured by then is kept. */
+/** Hard ceiling on the main pass; whatever was captured by then is kept. */
 private const val SCAN_TIMEOUT_MS = 45_000L
+
+/**
+ * Hard ceiling on the page-widget pass. It only ever runs after a starved main pass, which ends
+ * itself at about ten seconds ([EndReason.NO_FEED]), so the two together stay well inside the
+ * budget a scan had before this existed.
+ */
+private const val PLUGIN_TIMEOUT_MS = 15_000L
 
 /** Chrome's major version, as it appears in [Constants.DESKTOP_UA]. */
 private const val UA_CHROME_MAJOR = "126"
@@ -144,6 +152,41 @@ internal fun isAllowedNavigation(url: String?): Boolean {
         .equals(page.path.orEmpty().trimEnd('/'), ignoreCase = true)
 }
 
+/**
+ * True only for Facebook's own Page Plugin, and only during the second pass.
+ *
+ * Deliberately narrower than [isAllowedNavigation]: one host, one path, https, and the query left
+ * free because that is where the widget's own parameters live. The page itself must never be able
+ * to navigate here — nothing on it is allowed to choose where the collector goes — so this is a
+ * separate predicate the second pass opts into rather than a widening of the guard.
+ */
+internal fun isPluginNavigation(url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    val target = url.toUriOrNull() ?: return false
+    if (!target.scheme.equals("https", ignoreCase = true)) return false
+    if (!target.host.equals("www.facebook.com", ignoreCase = true)) return false
+    return target.path.orEmpty().trimEnd('/').equals("/plugins/page.php", ignoreCase = true)
+}
+
+/**
+ * Whether a main pass that has finished should be followed by the page-widget pass.
+ *
+ * The one symptom worth falling back on is starvation: not a single `/api/graphql` body was
+ * forwarded, so whatever else happened, the feed never answered. The three endings excluded are
+ * the ones where a second pass would be pointless or wrong — the network is down, Facebook has
+ * refused us outright, or the owner has left the app and nothing more should be started.
+ *
+ * Note that [EndReason.TIMEOUT], [EndReason.LOGIN_WALL] and [EndReason.NO_MORE_POSTS] are *not*
+ * excluded: a scan can end any of those ways and still have collected nothing from the feed.
+ */
+internal fun shouldRunPluginPass(graphqlBodies: Int, end: EndReason): Boolean {
+    if (graphqlBodies > 0) return false
+    return when (end) {
+        EndReason.NETWORK_ERROR, EndReason.BLOCKED, EndReason.CANCELLED -> false
+        EndReason.NO_FEED, EndReason.TIMEOUT, EndReason.LOGIN_WALL, EndReason.NO_MORE_POSTS -> true
+    }
+}
+
 /** Whether a blocked navigation looks like Facebook demanding an account rather than a stray link. */
 internal fun looksLikeLoginRedirect(url: String?): Boolean {
     val path = url?.toUriOrNull()?.path?.lowercase()?.trimEnd('/') ?: return false
@@ -220,14 +263,32 @@ private class ScanFacts {
     var httpStatus: String? = null
     val blocked = mutableListOf<String>()
 
+    /** Second pass only, and only when there was one. */
+    var pluginRan: Boolean = false
+    var pluginMs: Long = 0
+    var pluginEnd: EndReason? = null
+    var pluginError: String? = null
+    var atPluginEnd: String? = null
+
     fun blocked(url: String?) {
         if (blocked.size >= MAX_BLOCKED_LOGGED) return
         val stripped = hostAndPath(url)
         if (stripped !in blocked) blocked.add(stripped)
     }
 
+    /** What the second pass did, for the page-widget block of the diagnostics. */
+    fun pluginFields(pluginPosts: Int): List<Pair<String, String?>> = listOf(
+        "pluginUrl" to hostAndPath(Constants.PLUGIN_URL),
+        "pluginPassMs" to pluginMs.toString(),
+        "pluginEnd" to pluginEnd?.name,
+        "pluginPosts" to pluginPosts.toString(),
+        "pluginError" to pluginError,
+        "sizeAtPluginEnd" to atPluginEnd,
+    )
+
     fun fields(
         jsonChunks: Int,
+        graphqlBodies: Int,
         domPosts: Int,
         appVersion: String,
         density: String,
@@ -248,6 +309,9 @@ private class ScanFacts {
         "mainFrameHttpStatus" to httpStatus,
         "blockedNavigations" to blocked.takeIf { it.isNotEmpty() }?.joinToString(", "),
         "jsonChunks" to jsonChunks.toString(),
+        // The number the whole fallback turns on: chunks include the blocks the HTML already
+        // carried, and only these say the feed itself ever answered.
+        "graphqlBodies" to graphqlBodies.toString(),
         "domPosts" to domPosts.toString(),
     )
 }
@@ -257,6 +321,20 @@ private class ScanFacts {
  * agent, lets `collector.js` close Facebook's first login dialog and scroll, and buffers the JSON
  * responses the page fetches while it does.
  *
+ * A scan is up to two passes in the same WebView, one after the other, never at the same time:
+ *
+ *  1. **The page.** As above, ending at Facebook's sign-in wall, at the end of the posts, at the
+ *     script's own clock, or — the VPN case — at [EndReason.NO_FEED] about ten seconds in, once
+ *     the login dialog has been closed and nothing at all has come of it.
+ *  2. **The page widget**, and only when the first pass was starved ([shouldRunPluginPass]): not
+ *     one feed response forwarded, and an ending that leaves a second try worth making. The same
+ *     WebView is pointed at Facebook's Page Plugin, which renders logged out with no dialog even
+ *     while hidden, and `plugin_collector.js` reads the five newest posts off it.
+ *
+ * The second pass never changes [CollectResult.end]: what ended the *scan* is what happened on the
+ * page, and the scan log should go on saying so — "Facebook withheld the feed" beside "Page widget
+ * (5 newest)" is the honest pair of facts.
+ *
  * One instance runs one scan at a time. [snapshot] can be read from any thread and returns what
  * has arrived so far, so a caller that cancels [collect] can still record the partial scan.
  */
@@ -265,9 +343,12 @@ class FeedCollector(private val appContext: Context) {
     private val lock = Any()
     private val jsonChunks = mutableListOf<String>()
     private var bufferedChars = 0L
+    private var graphqlBodies = 0
     private var domPosts = emptyList<DomPost>()
+    private var pluginPosts = emptyList<PluginPost>()
     private var finalEnd: EndReason? = null
     private var diagBody: String? = null
+    private var pluginDiagBody: String? = null
     private var facts = ScanFacts()
 
     /**
@@ -301,12 +382,23 @@ class FeedCollector(private val appContext: Context) {
             diagnostics = DiagnosticsText.document(
                 fields = facts.fields(
                     jsonChunks = jsonChunks.size,
+                    graphqlBodies = graphqlBodies,
                     domPosts = domPosts.size,
                     appVersion = appVersion,
                     density = displayDensity,
                 ),
                 json = diagBody,
+                plugin = if (facts.pluginRan) {
+                    DiagnosticsText.Block(
+                        fields = facts.pluginFields(pluginPosts.size),
+                        json = pluginDiagBody,
+                    )
+                } else {
+                    null
+                },
             ),
+            pluginPosts = pluginPosts.toList(),
+            graphqlBodies = graphqlBodies,
         )
     }
 
@@ -337,8 +429,7 @@ class FeedCollector(private val appContext: Context) {
             finish(EndReason.NETWORK_ERROR)
             return snapshot()
         }
-        val done = CompletableDeferred<EndReason>()
-        val session = Session(webView, host, done)
+        val session = Session(webView, host)
         var loadWatchdog: Job? = null
         try {
             configure(webView)
@@ -373,14 +464,23 @@ class FeedCollector(private val appContext: Context) {
                 if (!session.progressed) session.endWith(EndReason.NETWORK_ERROR)
             }
 
-            val reason = withTimeoutOrNull(SCAN_TIMEOUT_MS) { done.await() }
+            val reason = withTimeoutOrNull(SCAN_TIMEOUT_MS) { session.done.await() }
             if (reason == null) {
                 // Timed out before the script finished, so it never sent its `dom` message. Ask for
                 // one now: on a slow page that is the difference between the DOM fallback and
                 // nothing at all.
                 session.requestDomDump()
             }
-            finish(reason ?: EndReason.TIMEOUT)
+            val mainEnd = reason ?: EndReason.TIMEOUT
+            finish(mainEnd)
+            // The main pass is over, so its watchdog is too: the second pass has its own budget and
+            // must not be ended by a timer that was counting the first one's page load.
+            loadWatchdog?.cancel()
+            loadWatchdog = null
+
+            if (shouldRunPluginPass(graphqlBodies(), mainEnd)) {
+                runPluginPass(session, webView)
+            }
             return snapshot()
         } catch (e: CancellationException) {
             throw e
@@ -400,6 +500,37 @@ class FeedCollector(private val appContext: Context) {
                 // still on the stack (or a posted completion) is well clear of the WebView.
                 yield()
                 session.teardown()
+            }
+        }
+    }
+
+    /**
+     * The second pass: the same WebView, pointed at Facebook's Page Plugin.
+     *
+     * Everything about the teardown contract is unchanged, because this runs *inside* the main
+     * scan's `try`: the one `finally` below still measures, yields and tears down exactly once,
+     * whichever pass was running when the caller cancelled or something threw.
+     *
+     * It is deliberately quiet about failure. The fallback exists to salvage a scan that already
+     * went badly; a widget that will not load leaves the scan exactly where it already was.
+     */
+    private suspend fun runPluginPass(session: Session, webView: HeadlessWebView) {
+        val startedAt = System.currentTimeMillis()
+        fact { pluginRan = true }
+        try {
+            val done = session.beginPluginPass()
+            runCatching { webView.stopLoading() }
+            webView.loadUrl(Constants.PLUGIN_URL)
+            val reason = withTimeoutOrNull(PLUGIN_TIMEOUT_MS) { done.await() }
+            fact { pluginEnd = reason ?: EndReason.TIMEOUT }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            fact { pluginError = e.javaClass.simpleName }
+        } finally {
+            fact {
+                pluginMs = System.currentTimeMillis() - startedAt
+                atPluginEnd = measure(webView)
             }
         }
     }
@@ -457,15 +588,25 @@ class FeedCollector(private val appContext: Context) {
     }
 
     private fun setDiag(body: String) = synchronized(lock) {
-        diagBody = if (body.length > MAX_DIAG_CHARS) body.substring(0, MAX_DIAG_CHARS) else body
+        diagBody = capDiag(body)
     }
+
+    private fun setPluginDiag(body: String) = synchronized(lock) {
+        pluginDiagBody = capDiag(body)
+    }
+
+    private fun capDiag(body: String): String =
+        if (body.length > MAX_DIAG_CHARS) body.substring(0, MAX_DIAG_CHARS) else body
 
     private fun reset() = synchronized(lock) {
         jsonChunks.clear()
         bufferedChars = 0
+        graphqlBodies = 0
         domPosts = emptyList()
+        pluginPosts = emptyList()
         finalEnd = null
         diagBody = null
+        pluginDiagBody = null
         facts = ScanFacts()
     }
 
@@ -473,8 +614,16 @@ class FeedCollector(private val appContext: Context) {
         finalEnd = reason
     }
 
-    /** Drops the chunk instead of the scan when the buffer is full: partial data still parses. */
-    private fun addChunk(body: String) = synchronized(lock) {
+    private fun graphqlBodies(): Int = synchronized(lock) { graphqlBodies }
+
+    /**
+     * Drops the chunk instead of the scan when the buffer is full: partial data still parses.
+     *
+     * [fromFeed] is counted even when the body itself is dropped for space: the count is evidence
+     * that the feed answered at all, which is a different question from what it said.
+     */
+    private fun addChunk(body: String, fromFeed: Boolean) = synchronized(lock) {
+        if (fromFeed) graphqlBodies++
         if (bufferedChars + body.length > MAX_BUFFERED_CHARS) return@synchronized
         jsonChunks.add(body)
         bufferedChars += body.length
@@ -482,6 +631,10 @@ class FeedCollector(private val appContext: Context) {
 
     private fun setDomPosts(posts: List<DomPost>) = synchronized(lock) {
         domPosts = posts
+    }
+
+    private fun setPluginPosts(posts: List<PluginPost>) = synchronized(lock) {
+        pluginPosts = posts
     }
 
     /**
@@ -606,24 +759,51 @@ class FeedCollector(private val appContext: Context) {
         }
     }
 
+    /** Which page this WebView is on, and therefore which script is talking to us. */
+    private enum class Pass { MAIN, PLUGIN }
+
     /** The mutable state belonging to one WebView, kept together so teardown can be idempotent. */
     private inner class Session(
         private val webView: HeadlessWebView,
         private val host: WebViewHost,
-        private val done: CompletableDeferred<EndReason>,
     ) {
         private val mainHandler = Handler(Looper.getMainLooper())
 
         /**
-         * Ends the scan from a WebView callback.
+         * The pass in progress. Written only from the main thread (where the scan runs) and read
+         * from WebView callbacks, which are on the main thread too; volatile because the message
+         * listener's thread affinity is not something to take on trust.
+         */
+        @Volatile
+        var pass: Pass = Pass.MAIN
+            private set
+
+        /** Completed by whatever ends the pass in progress; replaced when the second one starts. */
+        var done: CompletableDeferred<EndReason> = CompletableDeferred()
+            private set
+
+        /**
+         * Hands the WebView over to the page widget: a fresh deferred, so the main pass's ending
+         * cannot end this one as well, and a pass flag the navigation guard and the message
+         * listener both read.
+         */
+        fun beginPluginPass(): CompletableDeferred<EndReason> {
+            pass = Pass.PLUGIN
+            done = CompletableDeferred()
+            return done
+        }
+
+        /**
+         * Ends the pass in progress from a WebView callback.
          *
          * Completing [done] resumes the scan, and the scan's `finally` destroys this WebView, so
          * the completion is posted: it must never happen on the stack of the engine callback that
          * is asking for it. Calling this twice is harmless; the first reason wins.
          */
         fun endWith(reason: EndReason) {
-            if (done.isCompleted) return
-            mainHandler.post { done.complete(reason) }
+            val current = done
+            if (current.isCompleted) return
+            mainHandler.post { current.complete(reason) }
         }
 
         /** Set once the page load or the script shows a sign of life; read by the load watchdog. */
@@ -693,11 +873,18 @@ class FeedCollector(private val appContext: Context) {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 if (request?.isForMainFrame != true) return false
                 val url = request.url?.toString()
-                if (isAllowedNavigation(url)) return false
+                if (isAllowedHere(url)) return false
                 fact { blocked(url) }
                 if (endsScanAsBlocked(url)) endWith(EndReason.BLOCKED)
                 return true
             }
+
+            /**
+             * The page is always allowed; the widget only while the second pass owns the WebView.
+             * The guard never widens on its own — the second pass opts in by starting.
+             */
+            private fun isAllowedHere(url: String?): Boolean =
+                isAllowedNavigation(url) || (pass == Pass.PLUGIN && isPluginNavigation(url))
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 if (injectManually) view?.evaluateJavascript(script, null)
@@ -773,13 +960,17 @@ class FeedCollector(private val appContext: Context) {
             progressed = true
             val raw = runCatching { message.data }.getOrNull() ?: return
             when (val decoded = CollectorMessage.decode(raw)) {
-                is CollectorMessage.JsonChunk -> addChunk(decoded.body)
+                is CollectorMessage.JsonChunk -> addChunk(decoded.body, decoded.fromFeed)
                 is CollectorMessage.Dom -> {
                     setDomPosts(decoded.posts)
                     pendingDump?.complete(Unit)
                 }
+                is CollectorMessage.Plugin -> setPluginPosts(decoded.posts)
                 is CollectorMessage.End -> endWith(decoded.reason)
-                is CollectorMessage.Diag -> setDiag(decoded.body)
+                // Each pass keeps its own log: they answer different questions, and the second
+                // one overwriting the first would lose the evidence of why there was a second.
+                is CollectorMessage.Diag ->
+                    if (pass == Pass.MAIN) setDiag(decoded.body) else setPluginDiag(decoded.body)
                 null -> Unit // Unrecognised payload: ignored, never fatal.
             }
         }
@@ -817,7 +1008,24 @@ class FeedCollector(private val appContext: Context) {
     }
 }
 
-/** `collector.js` is read from assets once per process and kept; it is a few kilobytes. */
+/**
+ * The document-start payload: `collector.js` and `plugin_collector.js`, in that order, read from
+ * assets once per process and kept. Between them they are a few tens of kilobytes.
+ *
+ * **One registration, two scripts, on purpose.** `addDocumentStartJavaScript` is registered per
+ * origin, not per URL, so anything registered for `https://www.facebook.com` runs on the page
+ * *and* on the page widget — there is no way to register one script for one and one for the other.
+ * Splitting them into two registrations would therefore not separate them; it would only mean two
+ * chances to leave one behind when the second pass begins. So both are installed once, before the
+ * first load, and each gates itself on `location.pathname` at the very top of its own closure:
+ * `collector.js` returns immediately under `/plugins/`, `plugin_collector.js` returns immediately
+ * anywhere else. Each also keeps its own install guard, so neither can run twice in one document,
+ * and the two files agree on the gate (asserted from both ends in the node tests).
+ *
+ * The same combined string is what the manual-injection fallback evaluates when
+ * `DOCUMENT_START_SCRIPT` is unsupported, which is why the gates matter there too: that path
+ * injects at page start *and* page finish.
+ */
 private object CollectorScript {
 
     @Volatile
@@ -830,8 +1038,18 @@ private object CollectorScript {
         }
     }
 
-    private fun read(context: Context): String = try {
-        context.assets.open(ASSET_COLLECTOR_JS).bufferedReader().use { it.readText() }
+    private fun read(context: Context): String {
+        // Without the page's own collector there is no scan at all, so a missing widget script is
+        // the lesser loss: the main pass still runs, and only the fallback is unavailable.
+        val page = asset(context, ASSET_COLLECTOR_JS)
+        if (page.isBlank()) return ""
+        val plugin = asset(context, ASSET_PLUGIN_COLLECTOR_JS)
+        // Each file is a complete IIFE; the semicolon is belt and braces against ASI surprises.
+        return if (plugin.isBlank()) page else "$page\n;\n$plugin"
+    }
+
+    private fun asset(context: Context, name: String): String = try {
+        context.assets.open(name).bufferedReader().use { it.readText() }
     } catch (_: Exception) {
         ""
     }

@@ -20,6 +20,86 @@ class CollectorMessageTest {
     }
 
     @Test
+    fun decode_jsonMessage_saysWhetherItCameFromTheFeed() {
+        // The whole starvation signal: on a VPN the initial script blocks arrive and the feed
+        // never answers, so "a chunk came in" is not the same fact as "the feed is working".
+        val feed = CollectorMessage.decode("""{"t":"json","body":"{}","src":"graphql"}""")
+        val script = CollectorMessage.decode("""{"t":"json","body":"{}","src":"script"}""")
+
+        assertEquals(CollectorMessage.JsonChunk("{}", fromFeed = true), feed)
+        assertEquals(CollectorMessage.JsonChunk("{}", fromFeed = false), script)
+    }
+
+    @Test
+    fun decode_jsonMessageWithoutSource_isNotCountedAsFeedTraffic() {
+        assertEquals(CollectorMessage.JsonChunk("{}", fromFeed = false), CollectorMessage.decode("""{"t":"json","body":"{}"}"""))
+        assertEquals(
+            CollectorMessage.JsonChunk("{}", fromFeed = false),
+            CollectorMessage.decode("""{"t":"json","body":"{}","src":7}"""),
+        )
+    }
+
+    @Test
+    fun decode_pluginMessage_returnsPosts() {
+        val raw = """
+            {"t":"plugin","posts":[
+              {"utime":1789677637,"link":"https://www.facebook.com/CheckpointNZ/posts/pfbid02","text":"CHECKPOINT - Cavendish Drive","image":"https://scontent.test.fbcdn.net/photo.jpg"},
+              {"utime":1789600000,"link":null,"text":"HAZARD - SH1","image":null}
+            ]}
+        """.trimIndent()
+
+        val message = CollectorMessage.decode(raw)
+
+        assertEquals(
+            CollectorMessage.Plugin(
+                listOf(
+                    PluginPost(
+                        utime = 1789677637,
+                        link = "https://www.facebook.com/CheckpointNZ/posts/pfbid02",
+                        text = "CHECKPOINT - Cavendish Drive",
+                        image = "https://scontent.test.fbcdn.net/photo.jpg",
+                    ),
+                    PluginPost(utime = 1789600000, link = null, text = "HAZARD - SH1", image = null),
+                ),
+            ),
+            message,
+        )
+    }
+
+    @Test
+    fun decode_pluginMessage_skipsEntriesWithoutTextOrTime() {
+        val raw = """
+            {"t":"plugin","posts":[
+              {"utime":1789677637},
+              {"text":"no time at all"},
+              {"utime":"1789677637","text":"a time that is not a number"},
+              "not an object",
+              {"utime":1789677637,"text":"  "},
+              {"utime":1789677637,"text":"CHECKPOINT - Trig Road"}
+            ]}
+        """.trimIndent()
+
+        val message = CollectorMessage.decode(raw)
+
+        assertEquals(
+            CollectorMessage.Plugin(
+                listOf(PluginPost(utime = 1789677637, link = null, text = "CHECKPOINT - Trig Road", image = null)),
+            ),
+            message,
+        )
+    }
+
+    @Test
+    fun decode_pluginMessage_withoutPostsArray_returnsNull() {
+        assertNull(CollectorMessage.decode("""{"t":"plugin"}"""))
+    }
+
+    @Test
+    fun decode_pluginMessage_withEmptyPostsArray_returnsEmptyList() {
+        assertEquals(CollectorMessage.Plugin(emptyList()), CollectorMessage.decode("""{"t":"plugin","posts":[]}"""))
+    }
+
+    @Test
     fun decode_jsonMessageWithoutBody_returnsNull() {
         assertNull(CollectorMessage.decode("""{"t":"json"}"""))
     }

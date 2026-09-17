@@ -12,6 +12,11 @@
  *   /api/graphql -> after ~10 posts a second [role=dialog] with no Close button appears and the
  *   feed stops (hard login wall).
  *
+ * And the sequence measured on the owner's phone, which is always on a VPN: the same Close, and
+ * then nothing — no /api/graphql response, no sign-in wall, no second post. That is what
+ * shouldEndStarved recognises, so the scan ends as NO_FEED at ~10 s and the page-widget fallback
+ * gets the rest of the budget.
+ *
  * Plain ES2017, no page globals other than the two install guards, everything in try/catch: a
  * throw here would be a scan that silently collects nothing.
  *
@@ -20,8 +25,9 @@
  * the very top, and each has its own install guard, so neither can ever run twice in one page.
  *
  * The pure decision helpers (isPluginPath, isAgeText, isShown, dialogDecision, shouldEndOnWall,
- * shouldStopOnStall, pickPostText, compactText, diagBody) are exported when this file is loaded by
- * node, so they can be tested without a browser: see app/src/test/js/collector.test.js.
+ * shouldEndStarved, shouldStopOnStall, pickPostText, compactText, diagBody) are exported when this
+ * file is loaded by node, so they can be tested without a browser: see
+ * app/src/test/js/collector.test.js.
  *
  * It also keeps a small, bounded diagnostic log of every round and ships it as one `diag` message,
  * because the WebView this runs in cannot be inspected from the outside: when a scan on the
@@ -79,6 +85,13 @@
   var STALL_ROUNDS = 8;
   var STALL_ROUNDS_MAX = 16;
   var MIN_ROUNDS_BEFORE_EMPTY_STOP = 10; // never give up on an empty feed in the first ~15 s
+  // Starvation: a Close that unlocked nothing. Six rounds (~9 s) after a successful Close with no
+  // feed response and no growth past the post the HTML already carried is the VPN case, measured
+  // on the owner's phone — and there is a page widget waiting, so ending here buys the fallback
+  // seventeen seconds it would otherwise spend watching a feed that is never going to paginate.
+  var STARVED_ROUNDS = 6;
+  // One article is the post embedded in the initial HTML. Two is pagination, which is not this.
+  var STARVED_MAX_ARTICLES = 1;
   // How long a closeless sign-in dialog must persist before it is believed to be the hard wall:
   // quickly once posts have been seen, patiently while the page is still settling.
   var WALL_ROUNDS_AFTER_POSTS = 2;
@@ -124,6 +137,8 @@
   var stalled = 0;
   var sawArticles = false;
   var wallRounds = 0;
+  /** The round that first clicked a Close, or -1 while no dialog has been closed. */
+  var closedAtRound = -1;
   var failedRounds = 0;
   var lastScrollTarget = -1;
 
@@ -205,7 +220,9 @@
         return;
       }
       jsonCount++;
-      send({ t: 'json', body: body });
+      // `src` is how Kotlin tells a feed response from the block the HTML already carried, which
+      // is the whole starvation signal: on a VPN the script blocks arrive and the feed never does.
+      send({ t: 'json', body: body, src: 'graphql' });
     } catch (e) {
       // ignore
     }
@@ -316,7 +333,7 @@
             continue;
           }
           scriptCount++;
-          send({ t: 'json', body: text });
+          send({ t: 'json', body: text, src: 'script' });
         } catch (e) {
           // ignore this block
         }
@@ -629,6 +646,34 @@
       return false;
     }
     return stalled >= STALL_ROUNDS;
+  }
+
+  /**
+   * Pure: has this scan been starved — the login dialog closed, and nothing behind it?
+   *
+   * On a VPN, Facebook answers a logged-out visitor with the post already embedded in the page's
+   * HTML and nothing more: the Close is accepted, the feed simply never paginates, and no sign-in
+   * wall arrives either, so neither of the honest endings ever fires and the scan runs out its own
+   * clock at ~27 s. That is time the page-widget fallback could be using, so this is the third
+   * ending: the Close worked, six rounds have passed, no `/api/graphql` body has been forwarded,
+   * and the page has not rendered more than the one post it came with.
+   *
+   * @param roundsSinceClose rounds completed since the first successful Close (-1 = none yet)
+   * @param graphqlBodies    feed responses forwarded so far (the initial script blocks are not these)
+   * @param articles         top-level rendered articles right now
+   */
+  function shouldEndStarved(roundsSinceClose, graphqlBodies, articles) {
+    try {
+      if (!(roundsSinceClose >= STARVED_ROUNDS)) {
+        return false;
+      }
+      if (graphqlBodies > 0) {
+        return false;
+      }
+      return articles <= STARVED_MAX_ARTICLES;
+    } catch (e) {
+      return false;
+    }
   }
 
   /**
@@ -1246,7 +1291,8 @@
         scripts: scriptCount,
         state: 'none',
         stalled: stalled,
-        wallRounds: wallRounds
+        wallRounds: wallRounds,
+        closedAt: closedAtRound
       };
     } catch (e) {
       pendingRound = null;
@@ -1404,6 +1450,17 @@
         return;
       }
 
+      if (closedAtRound < 0 && dialogState === 'closed') {
+        closedAtRound = rounds;
+      }
+      noteRound('closedAt', closedAtRound);
+      // Checked before the scroll, not after: once this is true another scroll changes nothing,
+      // and every round spent here is a round the page widget does not get.
+      if (shouldEndStarved(closedAtRound < 0 ? -1 : rounds - closedAtRound, jsonCount, articles.length)) {
+        finish('NO_FEED');
+        return;
+      }
+
       expandSeeMore(articles);
       var scrolled = scrollAll();
       noteRound('fixedScroller', scrolled.fixedScroller);
@@ -1504,6 +1561,7 @@
         needsViewportRewrite: needsViewportRewrite,
         dialogDecision: dialogDecision,
         shouldEndOnWall: shouldEndOnWall,
+        shouldEndStarved: shouldEndStarved,
         shouldStopOnStall: shouldStopOnStall,
         pickPostText: pickPostText,
         compactText: compactText,

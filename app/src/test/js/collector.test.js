@@ -174,6 +174,47 @@ check('shouldStopOnStall: sixteen stalled rounds end it whatever is pending', fu
   assert.strictEqual(collector.shouldStopOnStall(16, false, 9, 3, 0), false);
 });
 
+// ----------------------------------------------------------- shouldEndStarved
+
+check('shouldEndStarved: the owner\'s real scan — a Close that unlocked nothing', function () {
+  // From the phone, on a VPN: the login dialog was closed at round 1, the article count sat
+  // between 0 and 1 (the post already embedded in the HTML, and nothing else), and not one
+  // /api/graphql body ever arrived. Rounds 2..7 are six rounds of that, so round 7 is where the
+  // scan stops pretending and hands over to the page widget — about ten seconds in, rather than
+  // waiting out the script's own clock at twenty-seven.
+  [2, 3, 4, 5, 6].forEach(function (round) {
+    assert.strictEqual(collector.shouldEndStarved(round - 1, 0, 1), false, 'round ' + round);
+  });
+  assert.strictEqual(collector.shouldEndStarved(6, 0, 1), true);
+});
+
+check('shouldEndStarved: never before a Close has succeeded', function () {
+  // -1 is "no dialog has been closed yet". A page that never showed one is not starved; it is
+  // either still loading or is not the page we think it is, and the ordinary endings cover both.
+  assert.strictEqual(collector.shouldEndStarved(-1, 0, 0), false);
+  assert.strictEqual(collector.shouldEndStarved(-1, 0, 1), false);
+});
+
+check('shouldEndStarved: one graphql body means the feed is answering', function () {
+  assert.strictEqual(collector.shouldEndStarved(6, 1, 1), false);
+  assert.strictEqual(collector.shouldEndStarved(20, 3, 1), false);
+});
+
+check('shouldEndStarved: a feed that grew past the embedded post is not starved', function () {
+  // Two or more rendered articles means pagination is working, whatever the bodies say.
+  assert.strictEqual(collector.shouldEndStarved(6, 0, 2), false);
+  assert.strictEqual(collector.shouldEndStarved(20, 0, 10), false);
+});
+
+check('shouldEndStarved: an empty page counts too', function () {
+  assert.strictEqual(collector.shouldEndStarved(6, 0, 0), true);
+});
+
+check('shouldEndStarved survives rubbish', function () {
+  assert.strictEqual(collector.shouldEndStarved(null, null, null), false);
+  assert.strictEqual(collector.shouldEndStarved(undefined, undefined, undefined), false);
+});
+
 check('pickPostText prefers the message element over the whole article', function () {
   assert.strictEqual(
     collector.pickPostText('CHECKPOINT - Lincoln Road', 'Checkpoint Watch Auckland\n22m\nCHECKPOINT - Lincoln Road\nLike'),

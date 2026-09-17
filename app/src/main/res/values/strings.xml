@@ -128,6 +128,9 @@
          rather than reading as a failure. -->
     <string name="end_login_wall">Reached Facebook\'s sign-in wall (normal)</string>
     <string name="end_no_more_posts">Reached the end of the posts</string>
+    <!-- The VPN case: the login dialog was closed and nothing followed it. Named plainly, because
+         it is not a fault the owner can fix and the app has already worked around it. -->
+    <string name="end_no_feed">Facebook withheld the feed (common on a VPN)</string>
     <string name="end_timeout">Ran out of time</string>
     <string name="end_network_error">Network problem</string>
     <string name="end_blocked">Facebook redirected to sign-in</string>

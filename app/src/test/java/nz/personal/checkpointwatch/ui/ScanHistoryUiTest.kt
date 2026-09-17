@@ -133,6 +133,7 @@ class ScanHistoryUiTest {
             listOf(
                 R.string.end_login_wall,
                 R.string.end_no_more_posts,
+                R.string.end_no_feed,
                 R.string.end_timeout,
                 R.string.end_network_error,
                 R.string.end_blocked,
