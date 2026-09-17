@@ -85,8 +85,12 @@ class ScrapeRecorder(private val store: ScrapeStore) {
      * so [mergePosts] never sees (and never has to match against) two entries for the same
      * underlying post:
      *  1. Exact `postId` duplicates are collapsed, keeping the one with the longest text.
-     *  2. Remaining posts that share a text hash (e.g. a `dom:` placeholder and its real numeric
-     *     id both captured in the same scan) are collapsed into one, preferring the numeric id.
+     *  2. A remaining `dom:` post sharing a text hash with a numeric post in the same batch is
+     *     dropped in favour of the numeric one (the DOM fallback's placeholder for a post the
+     *     JSON feed also captured this scan). Two `dom:` posts can never collide here without
+     *     already sharing an id, since a `dom:` id is derived from its hash. Two *numeric* posts
+     *     that merely happen to share text are always kept as distinct posts — the page can
+     *     legitimately repost identical wording under a new id.
      */
     private fun dedupeIncoming(posts: List<RawPost>): List<RawPost> {
         val byId = LinkedHashMap<String, RawPost>()
@@ -95,21 +99,13 @@ class ScrapeRecorder(private val store: ScrapeStore) {
             if (current == null || post.text.length > current.text.length) byId[post.postId] = post
         }
 
-        val byHash = LinkedHashMap<String, RawPost>()
-        for (post in byId.values) {
-            val hash = DomPostExtractor.textHash(post.text)
-            val current = byHash[hash]
-            if (current == null || post.isPreferredOver(current)) byHash[hash] = post
-        }
-        return byHash.values.toList()
-    }
+        val numericHashes = byId.values
+            .filterNot { it.postId.startsWith(DOM_ID_PREFIX) }
+            .mapTo(mutableSetOf()) { DomPostExtractor.textHash(it.text) }
 
-    /** Prefers a non-`dom:` id over a `dom:` one, then the longer text, when merging duplicates. */
-    private fun RawPost.isPreferredOver(other: RawPost): Boolean {
-        val thisIsDom = postId.startsWith(DOM_ID_PREFIX)
-        val otherIsDom = other.postId.startsWith(DOM_ID_PREFIX)
-        if (thisIsDom != otherIsDom) return otherIsDom
-        return text.length > other.text.length
+        return byId.values.filterNot { post ->
+            post.postId.startsWith(DOM_ID_PREFIX) && DomPostExtractor.textHash(post.text) in numericHashes
+        }
     }
 
     /** Accumulated effect of merging one scan's posts, before the scrape row's id is known. */
@@ -131,7 +127,13 @@ class ScrapeRecorder(private val store: ScrapeStore) {
                 val hash = DomPostExtractor.textHash(post.text)
                 val fromMs = post.createdAt.minus(HASH_MATCH_WINDOW).toEpochMilli()
                 val toMs = post.createdAt.plus(HASH_MATCH_WINDOW).toEpochMilli()
-                store.findByTextHash(hash, fromMs, toMs)
+                val candidate = store.findByTextHash(hash, fromMs, toMs)
+                // A numeric post may only hash-match a dom: placeholder (the DB row it should
+                // bridge onto). A numeric post that merely shares text with a different existing
+                // numeric post is not a match at all — that's a genuinely new, distinct post. A
+                // dom: post, however, may hash-match any existing row (dom: or numeric).
+                val incomingIsDom = post.postId.startsWith(DOM_ID_PREFIX)
+                if (candidate != null && !incomingIsDom && !candidate.postId.startsWith(DOM_ID_PREFIX)) null else candidate
             }
 
             if (existing == null) {

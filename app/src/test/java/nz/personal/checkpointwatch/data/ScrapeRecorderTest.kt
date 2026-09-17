@@ -392,6 +392,56 @@ class ScrapeRecorderTest {
     }
 
     @Test
+    fun twoDistinctNumericPostsWithIdenticalTextInOneScanAreBothKept() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        val outcome = recorder.record(
+            listOf(post("100", checkpointText), post("200", checkpointText)),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertEquals(2, outcome.new)
+        assertEquals(2, outcome.seen)
+        assertEquals(2, store.posts.size)
+        assertTrue(store.posts.keys.containsAll(listOf("100", "200")))
+    }
+
+    @Test
+    fun laterNumericPostWithSameTextAsExistingNumericPostIsStoredAsNewNotMerged() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        recorder.record(
+            listOf(post("A", checkpointText)),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+        val originalA = store.posts.getValue("A")
+
+        val second = recorder.record(
+            listOf(post("B", checkpointText, createdAt = t0.plusSeconds(30))),
+            t0.plusSeconds(60),
+            t0.plusSeconds(65),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertEquals(1, second.new)
+        assertEquals(0, second.updated)
+        assertEquals(2, store.posts.size)
+        assertEquals(originalA, store.posts.getValue("A"))
+    }
+
+    @Test
     fun newReportTimeFallsBackToPostCreatedAtWhenNoReportedTime() = runTest {
         val store = FakeScrapeStore()
         val recorder = ScrapeRecorder(store)
