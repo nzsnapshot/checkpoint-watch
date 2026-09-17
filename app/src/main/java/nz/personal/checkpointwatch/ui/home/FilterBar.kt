@@ -20,6 +20,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.ui.CwIcons
+import nz.personal.checkpointwatch.ui.theme.chipOutline
 import nz.personal.checkpointwatch.ui.typeStyle
 
 /**
@@ -79,6 +81,13 @@ fun FilterBar(
                 selected = selected,
                 onClick = { onToggleType(type) },
                 modifier = Modifier.minimumInteractiveComponentSize(),
+                // An unselected chip is nothing but its outline, so that outline has to carry 3:1
+                // the way any other control boundary does; `outline` is a divider colour.
+                border = FilterChipDefaults.filterChipBorder(
+                    enabled = true,
+                    selected = selected,
+                    borderColor = MaterialTheme.colorScheme.chipOutline,
+                ),
                 label = { Text(style.label) },
                 leadingIcon = {
                     Icon(
@@ -93,6 +102,10 @@ fun FilterBar(
         AssistChip(
             onClick = { sheetOpen = true },
             modifier = Modifier.minimumInteractiveComponentSize(),
+            border = AssistChipDefaults.assistChipBorder(
+                enabled = true,
+                borderColor = MaterialTheme.colorScheme.chipOutline,
+            ),
             label = { Text(suburbFilter ?: allAreas) },
             leadingIcon = {
                 Icon(

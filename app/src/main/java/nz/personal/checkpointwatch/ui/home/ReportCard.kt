@@ -32,6 +32,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
@@ -42,6 +43,7 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.ui.AreaMention
@@ -108,7 +110,7 @@ fun ReportCard(
         clock,
         ago,
     )
-    val description = cardSentence(report, label, ago)
+    val description = cardSentence(report, label, ago, expanded)
     val expandLabel = stringResource(R.string.card_expand)
     val collapseLabel = stringResource(R.string.card_collapse)
     val stateText = stringResource(
@@ -121,7 +123,14 @@ fun ReportCard(
             .clip(RoundedCornerShape(18.dp))
             .background(scheme.surface)
             .drawBehind {
-                drawRect(color = style.color, size = Size(RAIL_WIDTH.toPx(), size.height))
+                // The start edge, not the left one: in an RTL layout the rail belongs on the right.
+                val rail = RAIL_WIDTH.toPx()
+                val x = if (layoutDirection == LayoutDirection.Rtl) size.width - rail else 0f
+                drawRect(
+                    color = style.color,
+                    topLeft = Offset(x, 0f),
+                    size = Size(rail, size.height),
+                )
             }
             .clickable(role = Role.Button) { expanded = !expanded }
             .semantics(mergeDescendants = true) {
@@ -279,89 +288,15 @@ private fun Pill(text: String, background: Color, foreground: Color) {
     )
 }
 
-@Composable
-private fun AlsoInArea(where: String, mentions: List<AreaMention>, now: Instant, colour: Color) {
-    val scheme = MaterialTheme.colorScheme
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(scheme.surfaceContainerLow)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.card_also_in, where),
-            style = MaterialTheme.typography.labelSmall,
-            color = colour,
-        )
-        mentions.forEach { mention ->
-            val mentionStyle = typeStyle(mention.type)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Icon(
-                    imageVector = mentionStyle.icon,
-                    contentDescription = null,
-                    tint = mentionStyle.color,
-                    modifier = Modifier.size(14.dp),
-                )
-                Text(
-                    text = "${mentionStyle.label} · ${TimeFormat.ago(mention.at, now)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colour,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ExpandedDetail(report: ReportUi, onOpenPost: (String) -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        HorizontalDivider(color = scheme.outlineVariant)
-        Text(
-            text = stringResource(R.string.card_full_post),
-            style = MaterialTheme.typography.labelSmall,
-            color = scheme.onSurfaceVariant,
-        )
-        Text(
-            text = report.postText,
-            style = MaterialTheme.typography.bodyMedium,
-            color = scheme.onSurface,
-        )
-        report.source?.takeIf { it.isNotBlank() }?.let { source ->
-            Text(
-                text = stringResource(R.string.card_source, source),
-                style = MaterialTheme.typography.bodyMedium,
-                color = scheme.onSurfaceVariant,
-            )
-        }
-        TextButton(
-            onClick = { onOpenPost(report.postUrl) },
-            modifier = Modifier.minimumInteractiveComponentSize(),
-        ) {
-            Text(stringResource(R.string.card_open_facebook))
-            Icon(
-                imageVector = CwIcons.OpenInNew,
-                contentDescription = null,
-                modifier = Modifier
-                    .padding(start = 8.dp)
-                    .size(16.dp),
-            )
-        }
-    }
-}
-
 /** The whole card as one sentence, for a screen reader: type, where, when, then what was said. */
 @Composable
-private fun cardSentence(report: ReportUi, label: String, ago: String): String {
+private fun cardSentence(report: ReportUi, label: String, ago: String, expanded: Boolean): String {
     val reported = stringResource(R.string.a11y_reported, ago)
     val newSuffix = stringResource(R.string.a11y_new)
     val oldSuffix = stringResource(R.string.a11y_old)
-    return remember(report, label, ago) {
+    val fullPost = stringResource(R.string.card_full_post)
+    val source = report.source?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.card_source, it) }
+    return remember(report, label, ago, expanded) {
         val where = listOfNotNull(label, report.road, report.suburb).joinToString(", ")
         buildString {
             append(where)
@@ -370,7 +305,13 @@ private fun cardSentence(report: ReportUi, label: String, ago: String): String {
             append(". ")
             if (report.details.isNotBlank()) append(report.details).append(". ")
             if (report.isNew) append(newSuffix).append(' ')
-            if (report.freshness == Freshness.OLD) append(oldSuffix)
+            if (report.freshness == Freshness.OLD) append(oldSuffix).append(' ')
+            // What the card shows when open has to be in the sentence too, or opening it is silent
+            // to a screen reader: the merged node is the only thing TalkBack reads here.
+            if (expanded) {
+                append(fullPost).append(". ").append(report.postText).append(". ")
+                if (source != null) append(source).append('.')
+            }
         }.trim()
     }
 }
