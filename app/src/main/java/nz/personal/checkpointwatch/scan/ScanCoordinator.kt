@@ -14,6 +14,7 @@ import nz.personal.checkpointwatch.collect.DiagnosticsText
 import nz.personal.checkpointwatch.collect.EndReason
 import nz.personal.checkpointwatch.collect.RawPost
 import nz.personal.checkpointwatch.collect.WebViewHost
+import nz.personal.checkpointwatch.collect.shouldRunPluginPass
 import nz.personal.checkpointwatch.data.CollectorKind
 import nz.personal.checkpointwatch.data.ScanTrigger
 import nz.personal.checkpointwatch.data.ScrapeOutcome
@@ -40,6 +41,14 @@ data class ScanSummary(
     val new: Int,
     val finishedAt: Instant,
     val trigger: ScanTrigger,
+    /**
+     * Facebook never answered the feed, so whatever this scan brought back came from the post
+     * embedded in the page or from the page widget's five newest. Not a failure — the scan may
+     * well have succeeded — but the reason a thin scan was thin.
+     */
+    val starved: Boolean = false,
+    /** Whether the phone was on a VPN when the scan ran, which is why it was starved. */
+    val vpnActive: Boolean = false,
 )
 
 /**
@@ -79,6 +88,11 @@ class ScanCoordinator(
      * because nothing else depends on it: a scan with nowhere to leave its notes is still a scan.
      */
     private val diagnostics: ScanDiagnosticsStore? = null,
+    /**
+     * Whether the phone is on a VPN. Only ever used to choose which sentence the banner adds to a
+     * scan Facebook rationed; it never decides whether or how a scan runs.
+     */
+    private val network: NetworkInfoProvider = NetworkInfoProvider { false },
     private val clock: () -> Instant = Instant::now,
     /**
      * Where the parsing and the database work happen. Callers are on the main thread — the screen
@@ -160,7 +174,17 @@ class ScanCoordinator(
                 ) to chosen
             }
             writeDiagnostics(trigger, collected, chosen, outcome.status)
-            _lastSummary.value = ScanSummary(outcome.status, outcome.new, finishedAt, trigger)
+            _lastSummary.value = ScanSummary(
+                status = outcome.status,
+                new = outcome.new,
+                finishedAt = finishedAt,
+                trigger = trigger,
+                // The same question the collector asked before it reached for the page widget: did
+                // the feed ever answer? Asked again here because the banner has to explain a thin
+                // scan whether or not the fallback then rescued it.
+                starved = shouldRunPluginPass(collected.graphqlBodies, collected.end),
+                vpnActive = isVpnActive(),
+            )
             return outcome
         } catch (cancellation: CancellationException) {
             // The app was left mid-scan. Recording has to finish outside the cancelled job, or
@@ -184,6 +208,13 @@ class ScanCoordinator(
         } catch (_: Exception) {
             collector.snapshot().copy(end = EndReason.NETWORK_ERROR)
         }
+
+    /** Never worth a failed scan: a missing sentence in a banner is a very small loss. */
+    private fun isVpnActive(): Boolean = try {
+        network.isVpnActive()
+    } catch (_: Exception) {
+        false
+    }
 
     private fun failureFor(noPosts: Boolean, end: EndReason): ScrapeStatus? = when {
         !noPosts -> null

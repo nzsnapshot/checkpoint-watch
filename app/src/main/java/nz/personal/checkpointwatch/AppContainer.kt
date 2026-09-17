@@ -12,6 +12,7 @@ import nz.personal.checkpointwatch.data.RoomScrapeStore
 import nz.personal.checkpointwatch.data.ScrapeDao
 import nz.personal.checkpointwatch.data.ScrapeRecorder
 import nz.personal.checkpointwatch.notify.Notifier
+import nz.personal.checkpointwatch.scan.AndroidNetworkInfoProvider
 import nz.personal.checkpointwatch.scan.FileScanDiagnosticsStore
 import nz.personal.checkpointwatch.scan.PostCollector
 import nz.personal.checkpointwatch.scan.ScanCoordinator
@@ -57,6 +58,7 @@ class AppContainer(context: Context) {
             recorder = ScrapeRecorder(RoomScrapeStore(database)),
             lastFinishedAt = { database.scrapeDao().lastFinishedAt() },
             diagnostics = scanDiagnostics,
+            network = AndroidNetworkInfoProvider(appContext),
         )
     }
 }

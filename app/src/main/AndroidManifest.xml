@@ -3,6 +3,13 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+      WorkManager merges this in anyway, to wait for a connection before a background check. It is
+      declared here as well because the app now reads it directly, for one thing only: whether the
+      phone is on a VPN, which is why Facebook rations the feed and which sentence the status
+      banner should then add. It reveals nothing about the connection beyond that.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:name=".App"

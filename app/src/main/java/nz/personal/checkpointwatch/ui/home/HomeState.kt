@@ -48,13 +48,27 @@ sealed interface BannerUi {
 /** Turns a scan's raw state into the banner's exact copy. Pure; NZ English, never alarming. */
 object BannerBuilder {
 
+    /**
+     * What a scan Facebook rationed adds to the banner, on a VPN.
+     *
+     * Two sentences: what happened, and the one thing that fixes it. Checking more often is not a
+     * workaround for a broken app — five posts every half hour is a complete history at the rate
+     * this page posts — so it is offered as the answer rather than as an apology.
+     */
+    private const val STARVED_ON_VPN =
+        "On a VPN Facebook only shares its 5 newest posts. " +
+            "Background updates every 30 minutes keep the history complete."
+
+    /** The same event without a VPN to blame: said once, plainly, and not dwelt on. */
+    private const val STARVED = "Facebook only shared its newest posts this time."
+
     fun build(scanning: Boolean, firstEver: Boolean, summary: ScanSummary?, newReportCount: Int): BannerUi {
         if (scanning) {
             val text = if (firstEver) "Finding checkpoints for the first time…" else "Finding checkpoints…"
             return BannerUi.Message(text, BannerKind.SCANNING)
         }
         if (summary == null) return BannerUi.None
-        return when (summary.status) {
+        val base = when (summary.status) {
             ScrapeStatus.OK -> if (newReportCount > 0) {
                 BannerUi.Message(
                     "Found $newReportCount new ${reportWord(newReportCount)}",
@@ -77,6 +91,25 @@ object BannerBuilder {
             )
             ScrapeStatus.CANCELLED -> BannerUi.None
         }
+        return base.withStarvedNote(summary)
+    }
+
+    /**
+     * Appends the explanation for a scan the feed never answered.
+     *
+     * The kind becomes [BannerKind.GAP] rather than [BannerKind.FAILED]: a rationed scan is
+     * "there is history you are not seeing", which is what GAP already means everywhere else in
+     * this app, and it carries the caution icon rather than an error one. Nothing is appended to a
+     * scan that never reached Facebook — "couldn't reach Facebook" and "Facebook only shared its
+     * newest posts" are two contradictory explanations for one event — or to a cancelled one,
+     * which says nothing at all by design.
+     */
+    private fun BannerUi.withStarvedNote(summary: ScanSummary): BannerUi {
+        if (!summary.starved) return this
+        if (summary.status == ScrapeStatus.FAILED_NETWORK) return this
+        val message = this as? BannerUi.Message ?: return this
+        val note = if (summary.vpnActive) STARVED_ON_VPN else STARVED
+        return BannerUi.Message("${message.text} · $note", BannerKind.GAP)
     }
 
     private fun reportWord(count: Int): String = if (count == 1) "report" else "reports"

@@ -405,8 +405,19 @@ class BannerBuilderTest {
 
     private val finishedAt = Instant.parse("2026-09-18T09:00:00Z")
 
-    private fun summary(status: ScrapeStatus, new: Int = 0) =
-        ScanSummary(status = status, new = new, finishedAt = finishedAt, trigger = ScanTrigger.FOREGROUND)
+    private fun summary(
+        status: ScrapeStatus,
+        new: Int = 0,
+        starved: Boolean = false,
+        vpnActive: Boolean = false,
+    ) = ScanSummary(
+        status = status,
+        new = new,
+        finishedAt = finishedAt,
+        trigger = ScanTrigger.FOREGROUND,
+        starved = starved,
+        vpnActive = vpnActive,
+    )
 
     @Test
     fun `scanning shows the normal finding-checkpoints message`() {
@@ -479,6 +490,109 @@ class BannerBuilderTest {
         assertEquals(
             BannerUi.None,
             BannerBuilder.build(false, false, summary(ScrapeStatus.CANCELLED), newReportCount = 5),
+        )
+    }
+
+    // --- a scan Facebook rationed --------------------------------------------------------------
+    //
+    // On a VPN the feed never paginates and the app falls back to the page widget's five newest
+    // posts. That is not a failure and must not read as one — but it does explain a thin scan, and
+    // it comes with something the owner can actually do about it.
+
+    @Test
+    fun `a starved scan on a VPN explains itself and says what helps`() {
+        assertEquals(
+            BannerUi.Message(
+                "Found 2 new reports · On a VPN Facebook only shares its 5 newest posts. " +
+                    "Background updates every 30 minutes keep the history complete.",
+                BannerKind.GAP,
+            ),
+            BannerBuilder.build(
+                false,
+                false,
+                summary(ScrapeStatus.OK, starved = true, vpnActive = true),
+                newReportCount = 2,
+            ),
+        )
+    }
+
+    @Test
+    fun `a starved scan without a VPN says only what happened`() {
+        assertEquals(
+            BannerUi.Message(
+                "No new reports · Facebook only shared its newest posts this time.",
+                BannerKind.GAP,
+            ),
+            BannerBuilder.build(
+                false,
+                false,
+                summary(ScrapeStatus.OK, starved = true, vpnActive = false),
+                newReportCount = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun `a starved scan is a caution, never a failure`() {
+        // GAP already carries the banner's warning icon, and GAP is what "there is history you are
+        // not seeing" means everywhere else in this app. A rationed scan is the same news.
+        val banner = BannerBuilder.build(
+            false,
+            false,
+            summary(ScrapeStatus.OK_WITH_GAP, starved = true, vpnActive = true),
+            newReportCount = 1,
+        )
+
+        assertEquals(BannerKind.GAP, (banner as BannerUi.Message).kind)
+        assertTrue(banner.text.startsWith("Found 1 new report · earlier posts unavailable · On a VPN"))
+    }
+
+    @Test
+    fun `a starved scan that also found nothing still explains why`() {
+        val banner = BannerBuilder.build(
+            false,
+            false,
+            summary(ScrapeStatus.FAILED_NO_DATA, starved = true, vpnActive = true),
+            newReportCount = 0,
+        )
+
+        assertEquals(BannerKind.GAP, (banner as BannerUi.Message).kind)
+        assertTrue(banner.text.contains("On a VPN Facebook only shares its 5 newest posts."))
+    }
+
+    @Test
+    fun `a scan that never reached Facebook is about the connection, not the VPN`() {
+        // Adding "Facebook only shares its 5 newest posts" to "couldn't reach Facebook" would be
+        // two contradictory explanations for one event.
+        assertEquals(
+            BannerUi.Message("Couldn't reach Facebook · showing saved reports", BannerKind.FAILED),
+            BannerBuilder.build(
+                false,
+                false,
+                summary(ScrapeStatus.FAILED_NETWORK, starved = true, vpnActive = true),
+                newReportCount = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun `a cancelled scan still shows nothing, whatever it was starved of`() {
+        assertEquals(
+            BannerUi.None,
+            BannerBuilder.build(
+                false,
+                false,
+                summary(ScrapeStatus.CANCELLED, starved = true, vpnActive = true),
+                newReportCount = 5,
+            ),
+        )
+    }
+
+    @Test
+    fun `a healthy scan is left exactly as it was`() {
+        assertEquals(
+            BannerUi.Message("Found 4 new reports", BannerKind.FOUND),
+            BannerBuilder.build(false, false, summary(ScrapeStatus.OK, vpnActive = true), newReportCount = 4),
         )
     }
 }

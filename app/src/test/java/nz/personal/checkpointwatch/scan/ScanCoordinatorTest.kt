@@ -58,6 +58,8 @@ class ScanCoordinatorTest {
      * [Dispatchers.Unconfined] by default so these tests read as straight-line code; the one test
      * that cares about which dispatcher the work lands on passes its own.
      */
+    private var vpnActive = false
+
     private fun coordinator(
         recorder: ScrapeRecorder = this.recorder,
         compute: CoroutineDispatcher = Dispatchers.Unconfined,
@@ -67,6 +69,7 @@ class ScanCoordinatorTest {
         recorder = recorder,
         lastFinishedAt = { lastFinishedAt },
         diagnostics = diagnostics,
+        network = { vpnActive },
         clock = { now },
         computeDispatcher = compute,
     )
@@ -235,6 +238,64 @@ class ScanCoordinatorTest {
 
         assertEquals(ScrapeStatus.FAILED_NETWORK, outcome?.status)
         assertEquals(EndReason.NETWORK_ERROR.name, store.scrapes.single().endReason)
+    }
+
+    // --- why a scan was thin ---------------------------------------------------------------
+
+    @Test
+    fun `a scan the feed never answered is summarised as starved, with the VPN noted`() = runTest {
+        vpnActive = true
+        collector.result = CollectResult(
+            jsonChunks = listOf(jsonChunk("111")),
+            domPosts = emptyList(),
+            end = EndReason.NO_FEED,
+            graphqlBodies = 0,
+        )
+        val coordinator = coordinator()
+
+        coordinator.scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        val summary = coordinator.lastSummary.value
+        assertEquals(true, summary?.starved)
+        assertEquals(true, summary?.vpnActive)
+        assertEquals(ScrapeStatus.OK, summary?.status)
+    }
+
+    @Test
+    fun `a scan the feed answered is not starved, VPN or no VPN`() = runTest {
+        vpnActive = true
+        collector.result = CollectResult(
+            jsonChunks = listOf(jsonChunk("111")),
+            domPosts = emptyList(),
+            end = EndReason.LOGIN_WALL,
+            graphqlBodies = 3,
+        )
+        val coordinator = coordinator()
+
+        coordinator.scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        assertEquals(false, coordinator.lastSummary.value?.starved)
+        assertEquals(true, coordinator.lastSummary.value?.vpnActive)
+    }
+
+    @Test
+    fun `a network info provider that throws cannot fail a scan`() = runTest {
+        val coordinator = ScanCoordinator(
+            collector = collector,
+            httpFetcher = fetcher,
+            recorder = recorder,
+            lastFinishedAt = { lastFinishedAt },
+            diagnostics = diagnostics,
+            network = { throw IllegalStateException("no connectivity manager") },
+            clock = { now },
+            computeDispatcher = Dispatchers.Unconfined,
+        )
+        collector.result = webViewResult()
+
+        val outcome = coordinator.scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        assertEquals(ScrapeStatus.OK, outcome?.status)
+        assertEquals(false, coordinator.lastSummary.value?.vpnActive)
     }
 
     // --- diagnostics -----------------------------------------------------------------------
