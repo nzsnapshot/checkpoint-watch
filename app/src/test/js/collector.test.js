@@ -168,4 +168,87 @@ check('pickPostText trims, and survives rubbish', function () {
   assert.strictEqual(collector.pickPostText(42, 7), '');
 });
 
+// ------------------------------------------------------------------ isShown
+
+check('isShown: the measured phone case — a zero-width wrapper around a real dialog', function () {
+  // Measured live on the page: the [role=dialog] wrapper's own rect was 0 x 625 (its content
+  // overflows a zero-width box) while its Close button measured 36 x 36 and the dialog was
+  // plainly on screen. The old wrapper-rect test called that hidden, so the scan neither closed
+  // the dialog nor recognised the wall, and ended NO_MORE_POSTS with one post.
+  assert.strictEqual(collector.isShown(true, [{ w: 0, h: 625 }, { w: 36, h: 36 }]), true);
+});
+
+check('isShown: a non-zero wrapper is enough on its own', function () {
+  assert.strictEqual(collector.isShown(true, [{ w: 486, h: 625 }]), true);
+});
+
+check('isShown: a descendant with a box is enough', function () {
+  assert.strictEqual(
+    collector.isShown(true, [{ w: 0, h: 0 }, { w: 0, h: 0 }, { w: 300, h: 40 }]),
+    true
+  );
+});
+
+check('isShown: a dialog whose own style hides it is never shown', function () {
+  // display:none, visibility:hidden, aria-hidden, opacity 0 — whatever the boxes say.
+  assert.strictEqual(collector.isShown(false, [{ w: 486, h: 625 }]), false);
+  assert.strictEqual(collector.isShown(false, [{ w: 0, h: 625 }, { w: 36, h: 36 }]), false);
+});
+
+check('isShown: nothing measurable anywhere is not shown', function () {
+  assert.strictEqual(collector.isShown(true, []), false);
+  assert.strictEqual(collector.isShown(true, [{ w: 0, h: 0 }, { w: 0, h: 120 }]), false);
+});
+
+check('isShown survives rubbish input', function () {
+  assert.strictEqual(collector.isShown(true, null), false);
+  assert.strictEqual(collector.isShown(true, [null, undefined, {}]), false);
+  assert.strictEqual(collector.isShown(undefined, undefined), false);
+});
+
+// -------------------------------------------------------------- diagnostics
+
+check('compactText: newlines become spaces and the text is cut to length', function () {
+  assert.strictEqual(collector.compactText('See more from\nCheckpoint Watch', 40), 'See more from Checkpoint Watch');
+  assert.strictEqual(collector.compactText('0123456789', 4), '0123');
+  assert.strictEqual(collector.compactText('  padded  ', 40), 'padded');
+  assert.strictEqual(collector.compactText('a\r\n\nb', 40), 'a b');
+});
+
+check('compactText survives rubbish', function () {
+  assert.strictEqual(collector.compactText(null, 40), '');
+  assert.strictEqual(collector.compactText(42, 40), '');
+  assert.strictEqual(collector.compactText('text', 0), '');
+  assert.strictEqual(collector.compactText('text', -1), '');
+});
+
+check('diagBody: a small payload is sent whole', function () {
+  var body = collector.diagBody({ href: 'https://www.facebook.com/CheckpointNZ' }, [{ r: 1 }, { r: 2 }], 'LOGIN_WALL', 40960);
+  var parsed = JSON.parse(body);
+  assert.strictEqual(parsed.end, 'LOGIN_WALL');
+  assert.strictEqual(parsed.rounds.length, 2);
+  assert.strictEqual(parsed.install.href, 'https://www.facebook.com/CheckpointNZ');
+});
+
+check('diagBody: an oversized payload drops the repetitive middle, keeping the first and last rounds', function () {
+  var rounds = [];
+  for (var i = 1; i <= 30; i++) {
+    rounds.push({ r: i, ms: i * 1500, txt: 'a round that is not especially short at all' });
+  }
+  var body = collector.diagBody({ href: 'x' }, rounds, 'NO_MORE_POSTS', 400);
+  assert.ok(body.length <= 400, 'body was ' + body.length + ' chars');
+  var parsed = JSON.parse(body);
+  assert.strictEqual(parsed.rounds[0].r, 1);
+  assert.strictEqual(parsed.rounds[parsed.rounds.length - 1].r, 30);
+  assert.strictEqual(parsed.end, 'NO_MORE_POSTS');
+});
+
+check('diagBody survives rubbish', function () {
+  assert.strictEqual(typeof collector.diagBody(null, null, null, 40960), 'string');
+  // A structure that cannot be stringified must cost the diagnostics, never the scan.
+  var circular = {};
+  circular.self = circular;
+  assert.strictEqual(collector.diagBody(circular, [], 'TIMEOUT', 40960), '');
+});
+
 console.log('\n' + passed + ' checks passed');

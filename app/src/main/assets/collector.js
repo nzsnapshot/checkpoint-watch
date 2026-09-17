@@ -15,9 +15,13 @@
  * Plain ES2017, no page globals other than the two install guards, everything in try/catch: a
  * throw here would be a scan that silently collects nothing.
  *
- * The pure decision helpers (isAgeText, dialogDecision, shouldEndOnWall, shouldStopOnStall,
- * pickPostText) are exported when this file is loaded by node, so they can be tested without a
- * browser: see app/src/test/js/collector.test.js.
+ * The pure decision helpers (isAgeText, isShown, dialogDecision, shouldEndOnWall, shouldStopOnStall,
+ * pickPostText, compactText, diagBody) are exported when this file is loaded by node, so they can
+ * be tested without a browser: see app/src/test/js/collector.test.js.
+ *
+ * It also keeps a small, bounded diagnostic log of every round and ships it as one `diag` message,
+ * because the WebView this runs in cannot be inspected from the outside: when a scan on the
+ * owner's phone finds one post, that log is the only evidence of why.
  */
 (function () {
   'use strict';
@@ -62,6 +66,13 @@
   var MAX_AGE_TEXT = 16;
   var POST_ID = '"post_id"';
 
+  // Diagnostics. All bounded: this is evidence, not a log file, and it travels over the bridge.
+  var MAX_DIAG_ROUNDS = 30;
+  var MAX_DIAG_CHARS = 40 * 1024;
+  var MAX_DIAG_DIALOGS = 4;
+  var MAX_DIALOG_TEXT = 40;
+  var MAX_DIALOG_DESCENDANTS = 60;
+
   var startedAt = Date.now();
   var ended = false;
   var dumped = false;
@@ -75,6 +86,14 @@
   var sawArticles = false;
   var wallRounds = 0;
   var failedRounds = 0;
+
+  var diagInstall = null;
+  var diagRounds = [];
+  var pendingRound = null;
+  var jsonCount = 0;
+  var scriptCount = 0;
+  var xhrWrapped = false;
+  var fetchWrapped = false;
 
   // ---------------------------------------------------------------- bridge
 
@@ -140,6 +159,7 @@
       if (body.indexOf(POST_ID) === -1) {
         return;
       }
+      jsonCount++;
       send({ t: 'json', body: body });
     } catch (e) {
       // ignore
@@ -191,6 +211,7 @@
         }
         return originalSend.apply(this, arguments);
       };
+      xhrWrapped = true;
     }
   } catch (e) {
     // not a browser, or no XMLHttpRequest: nothing to wrap
@@ -226,6 +247,7 @@
         }
         return promise;
       };
+      fetchWrapped = true;
     }
   } catch (e) {
     // not a browser, or no fetch: nothing to wrap
@@ -248,6 +270,7 @@
           if (text.indexOf(POST_ID) === -1 || text.length > MAX_BODY) {
             continue;
           }
+          scriptCount++;
           send({ t: 'json', body: text });
         } catch (e) {
           // ignore this block
@@ -260,12 +283,9 @@
 
   // ------------------------------------------------------------------ DOM
 
-  function isTrulyVisible(element) {
+  /** Is this element's own computed style one that shows it? Says nothing about its size. */
+  function isStyleShown(element) {
     try {
-      var rect = element.getBoundingClientRect();
-      if (!rect || rect.width <= 0 || rect.height <= 0) {
-        return false;
-      }
       if (element.getAttribute && element.getAttribute('aria-hidden') === 'true') {
         return false;
       }
@@ -281,6 +301,62 @@
     } catch (e) {
       return false;
     }
+  }
+
+  /**
+   * Pure: is a dialog on screen, given its own style and the boxes measured around it?
+   *
+   * The wrapper's own rect is not evidence of anything. Measured on the live page, the
+   * [role=dialog] wrapper had a rect of 0 x 625 — its content overflows a zero-width box — while
+   * its Close button measured 36 x 36 and the dialog was plainly on screen. A wrapper-rect test
+   * therefore calls the real login dialog hidden, which costs the scan both the click that
+   * unlocks the feed and the ability to recognise the wall, and the scan ends with one post.
+   *
+   * So the style is the veto and the boxes are the evidence: any non-zero box anywhere — the
+   * wrapper, the Close button, or one of the first descendants — means something is being drawn.
+   *
+   * @param styleOk  the dialog's own computed style shows it
+   * @param boxes    [{ w, h }] measured around the dialog, in whatever order
+   */
+  function isShown(styleOk, boxes) {
+    try {
+      if (!styleOk || !boxes) {
+        return false;
+      }
+      for (var i = 0; i < boxes.length; i++) {
+        var box = boxes[i];
+        if (box && box.w > 0 && box.h > 0) {
+          return true;
+        }
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function boxOf(element) {
+    try {
+      var rect = element.getBoundingClientRect();
+      return rect ? { w: rect.width, h: rect.height } : { w: 0, h: 0 };
+    } catch (e) {
+      return { w: 0, h: 0 };
+    }
+  }
+
+  /** Boxes of the dialog's first [MAX_DIALOG_DESCENDANTS] descendants; only asked for when needed. */
+  function descendantBoxes(dialog) {
+    var boxes = [];
+    try {
+      var nodes = dialog.querySelectorAll('*');
+      var limit = Math.min(nodes.length, MAX_DIALOG_DESCENDANTS);
+      for (var i = 0; i < limit; i++) {
+        boxes.push(boxOf(nodes[i]));
+      }
+    } catch (e) {
+      // ignore
+    }
+    return boxes;
   }
 
   // A dialog is the hard login wall only if it is actually asking us to sign in.
@@ -356,33 +432,81 @@
     return wall ? 'wall' : 'none';
   }
 
-  // Looks at EVERY dialog, clicks every Close it finds, and reports what is left.
+  /**
+   * Looks at EVERY dialog, clicks every Close inside a shown one, and reports what is left.
+   *
+   * Returns { state, dialogs }: the decision, and up to [MAX_DIAG_DIALOGS] records of what each
+   * dialog measured and what was done to it, for the round log.
+   */
   function handleDialogs() {
     var facts = [];
+    var seen = [];
     try {
       var dialogs = document.querySelectorAll('[role="dialog"]');
       for (var i = 0; i < dialogs.length; i++) {
         try {
           var dialog = dialogs[i];
-          var visible = isTrulyVisible(dialog);
-          var close = visible ? dialog.querySelector('[aria-label="Close"]') : null;
-          if (close) {
-            // The real button has to be clicked: hiding the dialog does not unlock the feed.
-            close.click();
+          var closes = dialog.querySelectorAll('[aria-label="Close"]');
+          var wrapperBox = boxOf(dialog);
+          var closeBox = closes.length > 0 ? boxOf(closes[0]) : { w: 0, h: 0 };
+          var styleOk = isStyleShown(dialog);
+
+          // The wrapper and the Close button first, because they are two rects rather than sixty;
+          // the descendants are only measured when neither of them proves anything.
+          var shown = isShown(styleOk, [wrapperBox, closeBox]);
+          if (!shown && styleOk) {
+            shown = isShown(styleOk, descendantBoxes(dialog));
           }
-          facts.push({
-            visible: visible,
-            hasClose: !!close,
-            loginSignal: visible && !close ? hasLoginSignal(dialog) : false
-          });
+
+          // Never skip a Close because of the wrapper's own box: the wrapper is exactly the thing
+          // that measured zero on the phone, and the button it holds is what unlocks the feed.
+          var clicked = 0;
+          if (shown) {
+            for (var j = 0; j < closes.length; j++) {
+              try {
+                // The real button has to be clicked: hiding the dialog does not unlock the feed.
+                closes[j].click();
+                clicked++;
+              } catch (e) {
+                // skip this button
+              }
+            }
+          }
+
+          var hasClose = closes.length > 0;
+          var login = shown && !hasClose ? hasLoginSignal(dialog) : false;
+          facts.push({ visible: shown, hasClose: hasClose, loginSignal: login });
+
+          if (seen.length < MAX_DIAG_DIALOGS) {
+            seen.push({
+              w: rounded(wrapperBox.w),
+              h: rounded(wrapperBox.h),
+              styleOk: styleOk,
+              shown: shown,
+              close: hasClose,
+              cw: rounded(closeBox.w),
+              ch: rounded(closeBox.h),
+              clicked: clicked,
+              login: login,
+              txt: compactText(dialogText(dialog), MAX_DIALOG_TEXT)
+            });
+          }
         } catch (e) {
           // skip this dialog
         }
       }
     } catch (e) {
-      return 'none';
+      return { state: 'none', dialogs: seen };
     }
-    return dialogDecision(facts);
+    return { state: dialogDecision(facts), dialogs: seen };
+  }
+
+  function dialogText(dialog) {
+    try {
+      return dialog.innerText || '';
+    } catch (e) {
+      return '';
+    }
   }
 
   function topLevelArticles() {
@@ -412,6 +536,15 @@
     return articles;
   }
 
+  /** Every [role=article] on the page, nested ones included: the raw count, for the round log. */
+  function allArticleCount() {
+    try {
+      return document.querySelectorAll('[role="article"]').length;
+    } catch (e) {
+      return 0;
+    }
+  }
+
   function expandSeeMore(articles) {
     try {
       for (var i = 0; i < articles.length; i++) {
@@ -437,7 +570,9 @@
     }
   }
 
+  /** Scrolls everything that can be scrolled. Returns whether a fixed scroller was found. */
   function scrollAll() {
+    var fixedScroller = false;
     try {
       window.scrollTo(0, document.documentElement.scrollHeight);
     } catch (e) {
@@ -459,6 +594,7 @@
             node.scrollHeight > node.clientHeight
           ) {
             node.scrollTop = node.scrollHeight;
+            fixedScroller = true;
           }
         } catch (e) {
           // skip this ancestor
@@ -468,6 +604,7 @@
     } catch (e) {
       // ignore
     }
+    return fixedScroller;
   }
 
   var AGE_PATTERN = new RegExp(
@@ -578,6 +715,202 @@
     return posts;
   }
 
+  // ---------------------------------------------------------- diagnostics
+  //
+  // Nothing below may ever change what the scan does. Every entry point is wrapped, every helper
+  // returns a harmless default, and the whole log is bounded — 30 rounds, 4 dialogs each, 40
+  // characters of dialog text — so it stays evidence rather than becoming a payload.
+  //
+  // It carries no personal data: no cookies, no tokens, no post text, and URLs are stripped of
+  // their query and fragment before they are recorded.
+
+  function rounded(value) {
+    try {
+      return typeof value === 'number' && isFinite(value) ? Math.round(value) : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /** Pure: one line of text, newlines flattened to spaces, cut to [max] characters. */
+  function compactText(text, max) {
+    try {
+      if (typeof text !== 'string' || typeof max !== 'number' || !(max > 0)) {
+        return '';
+      }
+      var flat = text.replace(/[\r\n]+/g, ' ').trim();
+      return flat.length > max ? flat.substring(0, max) : flat;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /** A URL with its query and fragment removed, so nothing identifying can ride along. */
+  function stripUrl(url) {
+    try {
+      return String(url).split('?')[0].split('#')[0];
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function viewportMeta() {
+    try {
+      var meta = document.querySelector('meta[name="viewport"]');
+      return meta ? meta.getAttribute('content') : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * The facts that are only true once, recorded when the script installs.
+   *
+   * At document start there is no `<head>` yet, so the viewport meta is almost always missing
+   * here; [refreshInstall] picks it up on the first round that can see it.
+   */
+  function recordInstall() {
+    try {
+      var ready = '';
+      try {
+        ready = document.readyState;
+      } catch (e) {
+        ready = '';
+      }
+      var noBody = true;
+      try {
+        noBody = !document.body;
+      } catch (e) {
+        noBody = true;
+      }
+      var mobile = null;
+      try {
+        mobile = navigator.userAgentData ? !!navigator.userAgentData.mobile : null;
+      } catch (e) {
+        mobile = null;
+      }
+      diagInstall = {
+        href: stripUrl(location.href),
+        ua: navigator.userAgent,
+        uaMobile: mobile,
+        viewport: viewportMeta(),
+        dpr: window.devicePixelRatio,
+        xhrWrapped: xhrWrapped,
+        fetchWrapped: fetchWrapped,
+        ready: ready,
+        // Injected before the page's own scripts? Nothing was parsed yet if so.
+        atDocumentStart: ready === 'loading' && noBody
+      };
+    } catch (e) {
+      diagInstall = null;
+    }
+  }
+
+  function refreshInstall() {
+    try {
+      if (diagInstall && diagInstall.viewport === null) {
+        diagInstall.viewport = viewportMeta();
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  /**
+   * Starts this round's record. `sy` and `dh` are read before the round scrolls, so they say what
+   * the PREVIOUS round's scroll actually achieved — which is the question when a feed never grows.
+   */
+  function startRound() {
+    try {
+      pendingRound = {
+        r: rounds,
+        ms: Date.now() - startedAt,
+        vis: document.visibilityState,
+        iw: window.innerWidth,
+        ih: window.innerHeight,
+        dh: document.documentElement ? document.documentElement.scrollHeight : 0,
+        sy: rounded(window.scrollY),
+        arts: 0,
+        allArts: 0,
+        dlg: [],
+        fixedScroller: false,
+        json: jsonCount,
+        scripts: scriptCount,
+        state: 'none',
+        stalled: stalled,
+        wallRounds: wallRounds
+      };
+    } catch (e) {
+      pendingRound = null;
+    }
+  }
+
+  /**
+   * Files the round in progress. Called from the end of every round and from the top of
+   * [finish], so the round that decided to end the scan is in the log that reports the ending.
+   */
+  function flushRound() {
+    try {
+      var record = pendingRound;
+      pendingRound = null;
+      if (record && diagRounds.length < MAX_DIAG_ROUNDS) {
+        diagRounds.push(record);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function noteRound(field, value) {
+    try {
+      if (pendingRound) {
+        pendingRound[field] = value;
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  /**
+   * Pure: the whole diagnostic payload as a JSON string of at most [maxChars] characters.
+   *
+   * When it does not fit, rounds are dropped from the middle: the first round (what the page
+   * looked like when the script arrived) and the last ones (how it ended) are the two halves of
+   * the story, and the repetitive middle of a stalled scan is the part worth losing.
+   */
+  function diagBody(install, rounds_, end, maxChars) {
+    try {
+      var list = (rounds_ || []).slice();
+      for (;;) {
+        var text = JSON.stringify({ install: install, rounds: list, end: end });
+        if (typeof text !== 'string') {
+          return '';
+        }
+        if (text.length <= maxChars || list.length <= 1) {
+          return text;
+        }
+        list.splice(1, 1);
+      }
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function sendDiag(reason) {
+    try {
+      flushRound();
+      if (!diagInstall) {
+        recordInstall();
+      }
+      var body = diagBody(diagInstall, diagRounds, reason, MAX_DIAG_CHARS);
+      if (body) {
+        send({ t: 'diag', body: body });
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
   // ----------------------------------------------------------------- loop
 
   function stopLoop() {
@@ -604,6 +937,8 @@
       dumped = true;
       sendScriptBlocks();
       send({ t: 'dom', posts: domPosts() });
+      // Kotlin's own clock ran out, so this is the last word on what happened.
+      sendDiag('DUMP');
       flush();
     } catch (e) {
       // ignore
@@ -618,6 +953,7 @@
     stopLoop();
     sendScriptBlocks();
     send({ t: 'dom', posts: domPosts() });
+    sendDiag(reason);
     send({ t: 'end', reason: reason });
     flush();
   }
@@ -629,6 +965,8 @@
     }
     try {
       rounds++;
+      startRound();
+      refreshInstall();
 
       // The script's own budget, so the DOM fallback is always sent before Kotlin's clock runs out.
       if (Date.now() - startedAt >= MAX_ELAPSED_MS) {
@@ -636,20 +974,27 @@
         return;
       }
 
-      var dialogState = handleDialogs();
+      var dialogs = handleDialogs();
+      var dialogState = dialogs.state;
+      noteRound('dlg', dialogs.dialogs);
+      noteRound('state', dialogState);
+
       var articles = topLevelArticles();
       if (articles.length > 0) {
         sawArticles = true;
       }
+      noteRound('arts', articles.length);
+      noteRound('allArts', allArticleCount());
 
       wallRounds = dialogState === 'wall' ? wallRounds + 1 : 0;
+      noteRound('wallRounds', wallRounds);
       if (shouldEndOnWall(wallRounds, sawArticles)) {
         finish('LOGIN_WALL');
         return;
       }
 
       expandSeeMore(articles);
-      scrollAll();
+      noteRound('fixedScroller', scrollAll());
 
       if (articles.length === lastCount) {
         stalled++;
@@ -657,6 +1002,7 @@
         stalled = 0;
         lastCount = articles.length;
       }
+      noteRound('stalled', stalled);
 
       if (shouldStopOnStall(stalled, sawArticles, rounds) || rounds >= MAX_ROUNDS) {
         finish('NO_MORE_POSTS');
@@ -675,6 +1021,8 @@
         }
       }
     }
+    // Whatever the round did or threw, its record is filed. A no-op once finish() filed it.
+    flushRound();
   }
 
   function start() {
@@ -690,6 +1038,12 @@
     } catch (e) {
       // ignore
     }
+  }
+
+  if (IN_BROWSER) {
+    // Before anything else is done, and never allowed to fail: this is the record of the
+    // environment the script arrived in, which is half of what a puzzling scan needs explaining.
+    recordInstall();
   }
 
   try {
@@ -716,10 +1070,13 @@
     if (!IN_BROWSER && typeof module !== 'undefined' && module.exports) {
       module.exports = {
         isAgeText: isAgeText,
+        isShown: isShown,
         dialogDecision: dialogDecision,
         shouldEndOnWall: shouldEndOnWall,
         shouldStopOnStall: shouldStopOnStall,
-        pickPostText: pickPostText
+        pickPostText: pickPostText,
+        compactText: compactText,
+        diagBody: diagBody
       };
     }
   } catch (e) {
