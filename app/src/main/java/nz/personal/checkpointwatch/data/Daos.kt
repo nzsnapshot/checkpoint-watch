@@ -28,6 +28,31 @@ interface PostDao {
     suspend fun deleteById(postId: String)
 
     /**
+     * Records where a downloaded photo landed. A single-column update, not a whole-row one: the
+     * download finishes outside the scan's transaction, and rewriting a row read before the scan
+     * would undo whatever the scan had just written to it.
+     *
+     * `imagePath IS NULL` makes it idempotent and makes it lose races on purpose: a file already
+     * recorded is never replaced by a second download of the same post.
+     */
+    @Query("UPDATE posts SET imagePath = :path WHERE postId = :postId AND imagePath IS NULL")
+    suspend fun setImagePath(postId: String, path: String)
+
+    /** Every downloaded photo still spoken for, for the orphan sweep. */
+    @Query("SELECT imagePath FROM posts WHERE imagePath IS NOT NULL")
+    suspend fun allImagePaths(): List<String>
+
+    /**
+     * The photos belonging to the posts [deleteStale] is about to remove. Read first, deleted
+     * after: once the rows are gone there is nothing left to say which files were theirs.
+     */
+    @Query(
+        "SELECT imagePath FROM posts " +
+            "WHERE lastSeenAt < :cutoffMs AND createdAt < :cutoffMs AND imagePath IS NOT NULL",
+    )
+    suspend fun staleImagePaths(cutoffMs: Long): List<String>
+
+    /**
      * Retention. Both clocks have to agree: a post the page still shows (recent `lastSeenAt`) is
      * kept however old it is, and a post back-dated by the DOM fallback is kept until it has also
      * stopped being seen.
@@ -63,7 +88,8 @@ interface ReportDao {
             posts.url AS postUrl,
             posts.text AS postText,
             posts.gapBefore AS gapBefore,
-            posts.firstSeenAt AS firstSeenAt
+            posts.firstSeenAt AS firstSeenAt,
+            posts.imagePath AS imagePath
         FROM reports
         JOIN posts ON posts.postId = reports.postId
         ORDER BY posts.createdAt DESC, reports.indexInPost ASC

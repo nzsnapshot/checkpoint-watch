@@ -187,7 +187,7 @@ class ScrapeRecorder(private val store: ScrapeStore) {
             if (byId != null) {
                 // Direct id match: same post seen again, possibly edited.
                 if (existing.text == post.text) {
-                    store.updatePost(existing.copy(lastSeenAt = finishedAtMs))
+                    store.updatePost(existing.copy(lastSeenAt = finishedAtMs, imageUrl = keptImageUrl(existing, post)))
                 } else {
                     store.insertRevision(PostRevisionEntity(postId = existing.postId, text = existing.text, replacedAt = finishedAtMs))
                     store.updatePost(
@@ -197,6 +197,7 @@ class ScrapeRecorder(private val store: ScrapeStore) {
                             textHash = DomPostExtractor.textHash(post.text),
                             lastSeenAt = finishedAtMs,
                             editedAt = finishedAtMs,
+                            imageUrl = keptImageUrl(existing, post),
                         ),
                     )
                     parseAndInsertReports(post, existing.postId)
@@ -217,6 +218,11 @@ class ScrapeRecorder(private val store: ScrapeStore) {
                     lastSeenAt = finishedAtMs,
                     editedAt = null,
                     gapBefore = existing.gapBefore,
+                    imageUrl = keptImageUrl(existing, post),
+                    // The photo was downloaded against the placeholder row and the file is still
+                    // there; it crosses the bridge with the post. Left behind it would be a file
+                    // nothing points at, which the orphan sweep would quietly delete.
+                    imagePath = existing.imagePath,
                 )
                 store.insertPost(bridged)
                 parseAndInsertReports(post, post.postId)
@@ -224,8 +230,9 @@ class ScrapeRecorder(private val store: ScrapeStore) {
                 result.updatedCount++
             } else {
                 // Same content seen again under a different id (e.g. DOM fallback re-finding a
-                // post we already have from the JSON feed): just note it was seen.
-                store.updatePost(existing.copy(lastSeenAt = finishedAtMs))
+                // post we already have from the JSON feed): just note it was seen — and learn
+                // where its photo is, if this sighting is the one that carried it.
+                store.updatePost(existing.copy(lastSeenAt = finishedAtMs, imageUrl = keptImageUrl(existing, post)))
                 result.sightingPostIds += existing.postId
             }
         }
@@ -257,6 +264,17 @@ class ScrapeRecorder(private val store: ScrapeStore) {
         }
     }
 
+    /**
+     * Where this post's photo lives, learned once and then left alone.
+     *
+     * The first address wins. Facebook re-signs these URLs, so a later scan's "new" URL is the
+     * same photo with a different signature — taking it would change nothing about the picture and
+     * would send `ImageStore` off to download it again on a post whose copy is already on disk.
+     * The only move is from "we don't know" to "we do".
+     */
+    private fun keptImageUrl(existing: PostEntity, post: RawPost): String? =
+        existing.imageUrl ?: post.imageUrl
+
     private suspend fun insertNewPost(post: RawPost, finishedAtMs: Long): PostEntity {
         val entity = PostEntity(
             postId = post.postId,
@@ -269,6 +287,7 @@ class ScrapeRecorder(private val store: ScrapeStore) {
             lastSeenAt = finishedAtMs,
             editedAt = null,
             gapBefore = false,
+            imageUrl = post.imageUrl,
         )
         store.insertPost(entity)
         return entity

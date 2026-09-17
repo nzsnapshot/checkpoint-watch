@@ -24,6 +24,18 @@ data class PostEntity(
     val editedAt: Long?,
     /** True when the scan that first recorded this post found a gap in history before it. */
     val gapBefore: Boolean,
+    /**
+     * Where the post's photo lives on Facebook's content hosts, if it had one. Signed and
+     * expiring, so it is a lead rather than an address worth keeping: it is what `ImageStore`
+     * downloads from, once, and it is never what the UI loads.
+     */
+    val imageUrl: String? = null,
+    /**
+     * The downloaded copy, under the app's own files. Null until the download succeeds, and once
+     * set it is never replaced by a later sighting of the same post — the file on disk outlives
+     * the URL it came from.
+     */
+    val imagePath: String? = null,
 )
 
 /** One report parsed out of a post; a post can yield more than one, ordered by [indexInPost]. */
@@ -142,4 +154,6 @@ data class ReportRow(
     val postText: String,
     val gapBefore: Boolean,
     val firstSeenAt: Long,
+    /** The downloaded photo, if this post had one and it arrived. */
+    val imagePath: String? = null,
 )

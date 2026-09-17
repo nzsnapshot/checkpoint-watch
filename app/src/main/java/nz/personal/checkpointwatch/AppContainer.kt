@@ -6,6 +6,7 @@ import nz.personal.checkpointwatch.collect.CollectResult
 import nz.personal.checkpointwatch.collect.FeedCollector
 import nz.personal.checkpointwatch.collect.HttpLatestFetcher
 import nz.personal.checkpointwatch.collect.WebViewHost
+import nz.personal.checkpointwatch.data.ALL_MIGRATIONS
 import nz.personal.checkpointwatch.data.AppDatabase
 import nz.personal.checkpointwatch.data.ReportDao
 import nz.personal.checkpointwatch.data.RoomScrapeStore
@@ -33,7 +34,12 @@ class AppContainer(context: Context) {
     private val appContext = context.applicationContext
 
     val database: AppDatabase by lazy {
-        Room.databaseBuilder(appContext, AppDatabase::class.java, DATABASE_NAME).build()
+        Room.databaseBuilder(appContext, AppDatabase::class.java, DATABASE_NAME)
+            // No destructive fallback, ever: this database is the only copy of the owner's history
+            // and there is nowhere to restore it from. A missing migration should fail loudly in a
+            // test long before it can reach the phone.
+            .addMigrations(*ALL_MIGRATIONS)
+            .build()
     }
 
     /** The list and the scrape log read straight from these; there is no repository in between. */

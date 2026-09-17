@@ -22,7 +22,15 @@ class ScrapeRecorderTest {
         createdAt: Instant = t0,
         approx: Boolean = false,
         url: String = "https://www.facebook.com/CheckpointNZ/posts/$id",
-    ) = RawPost(postId = id, createdAt = createdAt, createdAtApprox = approx, text = text, url = url)
+        imageUrl: String? = null,
+    ) = RawPost(
+        postId = id,
+        createdAt = createdAt,
+        createdAtApprox = approx,
+        text = text,
+        url = url,
+        imageUrl = imageUrl,
+    )
 
     private val checkpointText = "🛑 CHECKPOINT – Lincoln Road, HENDERSON\nAfter the off-ramp\nTime: 11:55PM"
 
@@ -644,5 +652,158 @@ class ScrapeRecorderTest {
         val report = outcome.newReports.single()
         assertEquals(ReportType.CHECKPOINT, report.type)
         assertEquals(createdAt, report.at)
+    }
+
+    // --- photos ---------------------------------------------------------------------------------
+    //
+    // A post's photo arrives as a signed, expiring URL, and the downloaded copy is written outside
+    // this transaction by `ImageStore`. So the rule is one-way: the recorder may learn where a
+    // photo lives, and may never forget where one already is.
+
+    @Test
+    fun aNewPostKeepsThePhotoItArrivedWith() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        recorder.record(
+            listOf(post("1", checkpointText, imageUrl = "https://scontent.test.fbcdn.net/photo.jpg")),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertEquals("https://scontent.test.fbcdn.net/photo.jpg", store.posts.getValue("1").imageUrl)
+        assertNull(store.posts.getValue("1").imagePath)
+    }
+
+    @Test
+    fun aLaterSightingFillsInAPhotoTheFirstScanDidNotSee() = runTest {
+        // The initial HTML block often has no attachment on it while the feed's copy of the same
+        // story does, so the second scan is where a photo turns up for a post already stored.
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+        recorder.record(listOf(post("1", checkpointText)), t0, t0.plusSeconds(5), ScanTrigger.FOREGROUND, CollectorKind.WEBVIEW, "done")
+
+        recorder.record(
+            listOf(post("1", checkpointText, imageUrl = "https://scontent.test.fbcdn.net/photo.jpg")),
+            t0.plusSeconds(600),
+            t0.plusSeconds(605),
+            ScanTrigger.BACKGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertEquals("https://scontent.test.fbcdn.net/photo.jpg", store.posts.getValue("1").imageUrl)
+    }
+
+    @Test
+    fun aStoredPhotoIsNeverReplacedByALaterScansCopyOfTheSameUrl() = runTest {
+        // Facebook re-signs these URLs, so the "new" one is the same photo with a different
+        // signature. Taking it would invalidate nothing and re-download everything.
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+        recorder.record(
+            listOf(post("1", checkpointText, imageUrl = "https://scontent.test.fbcdn.net/photo.jpg?sig=first")),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        recorder.record(
+            listOf(post("1", checkpointText, imageUrl = "https://scontent.test.fbcdn.net/photo.jpg?sig=second")),
+            t0.plusSeconds(600),
+            t0.plusSeconds(605),
+            ScanTrigger.BACKGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertEquals(
+            "https://scontent.test.fbcdn.net/photo.jpg?sig=first",
+            store.posts.getValue("1").imageUrl,
+        )
+    }
+
+    @Test
+    fun anEditedPostKeepsItsDownloadedPhoto() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+        recorder.record(
+            listOf(post("1", checkpointText, imageUrl = "https://scontent.test.fbcdn.net/photo.jpg")),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+        // Stand in for ImageStore, which writes this column after the scan's transaction closes.
+        store.posts["1"] = store.posts.getValue("1").copy(imagePath = "/files/images/abc.jpg")
+
+        recorder.record(
+            listOf(post("1", "$checkpointText\nUPDATE: gone now", imageUrl = "https://scontent.test.fbcdn.net/photo.jpg")),
+            t0.plusSeconds(600),
+            t0.plusSeconds(605),
+            ScanTrigger.BACKGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertEquals("/files/images/abc.jpg", store.posts.getValue("1").imagePath)
+    }
+
+    @Test
+    fun aDownloadedPhotoCrossesTheDomToNumericBridge() = runTest {
+        // The page widget stores a post under a dom: id and its photo is downloaded against that
+        // row. When the JSON feed later produces the real numeric post, the file must come with
+        // it: the row is replaced, and a file nothing points at is a file the sweep deletes.
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+        recorder.record(
+            listOf(post("dom:abc123", checkpointText, approx = true, imageUrl = "https://scontent.test.fbcdn.net/photo.jpg")),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.PLUGIN,
+            "done",
+        )
+        store.posts["dom:abc123"] = store.posts.getValue("dom:abc123").copy(imagePath = "/files/images/abc.jpg")
+
+        recorder.record(
+            listOf(post("99", checkpointText)),
+            t0.plusSeconds(600),
+            t0.plusSeconds(605),
+            ScanTrigger.BACKGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertNull(store.posts["dom:abc123"])
+        val bridged = store.posts.getValue("99")
+        assertEquals("/files/images/abc.jpg", bridged.imagePath)
+        assertEquals("https://scontent.test.fbcdn.net/photo.jpg", bridged.imageUrl)
+    }
+
+    @Test
+    fun aPhotoFoundUnderADifferentIdIsKeptOnTheRowWeAlreadyHave() = runTest {
+        // The same post seen again through another collector, which this time carried the photo.
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+        recorder.record(listOf(post("1", checkpointText)), t0, t0.plusSeconds(5), ScanTrigger.FOREGROUND, CollectorKind.WEBVIEW, "done")
+
+        recorder.record(
+            listOf(post("dom:abc123", checkpointText, approx = true, imageUrl = "https://scontent.test.fbcdn.net/photo.jpg")),
+            t0.plusSeconds(600),
+            t0.plusSeconds(605),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.PLUGIN,
+            "done",
+        )
+
+        assertNull(store.posts["dom:abc123"])
+        assertEquals("https://scontent.test.fbcdn.net/photo.jpg", store.posts.getValue("1").imageUrl)
     }
 }

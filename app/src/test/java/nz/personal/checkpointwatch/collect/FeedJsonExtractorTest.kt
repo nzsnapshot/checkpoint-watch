@@ -2,6 +2,7 @@ package nz.personal.checkpointwatch.collect
 
 import nz.personal.checkpointwatch.Constants
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -127,6 +128,85 @@ class FeedJsonExtractorTest {
         val posts = FeedJsonExtractor.extract(listOf(fixture("initial_block.json")))
 
         assertEquals(Instant.ofEpochSecond(1789646506L), posts[0].createdAt)
+    }
+
+    // --- photos ---------------------------------------------------------------------------------
+
+    @Test
+    fun extract_photoAttachment_yieldsTheImageUrl() {
+        // Captured live: a checkpoint post with a photo on it. The uri is signed and expires,
+        // which is why the app downloads a copy rather than pointing at it.
+        val posts = FeedJsonExtractor.extract(listOf(fixture("initial_block_with_photo.json")))
+
+        assertEquals(1, posts.size)
+        assertEquals("1614480107133538", posts[0].postId)
+        assertTrue(posts[0].text.startsWith("🛑 CHECKPOINT – Cavendish Drive"))
+        assertEquals(
+            "https://scontent.fakl1-4.fna.fbcdn.net/v/t39.99422-6/" +
+                "814926055_1738813407377727_6580760051676800301_n.png?_nc_sig=REDACTED",
+            posts[0].imageUrl,
+        )
+    }
+
+    @Test
+    fun extract_storyWithoutAttachments_hasNoImage() {
+        val posts = FeedJsonExtractor.extract(listOf(fixture("initial_block.json")))
+
+        assertEquals(1, posts.size)
+        assertNull(posts[0].imageUrl)
+    }
+
+    @Test
+    fun extract_everyOtherFixture_hasNoImage() {
+        val posts = FeedJsonExtractor.extract(listOf(fixture("graphql_1.txt")))
+
+        posts.forEach { assertNull(it.imageUrl) }
+    }
+
+    @Test
+    fun extract_photoOnAHostThatIsNotFacebooks_isDropped() {
+        // The feed is untrusted input and the app fetches whatever address it keeps, unattended,
+        // from a background worker. Anything that is not plainly https on *.fbcdn.net is no image.
+        listOf(
+            "http://scontent.test.fbcdn.net/photo.jpg",
+            "https://fbcdn.net.evil.example/photo.jpg",
+            "https://example.com/photo.jpg",
+            "javascript:alert(1)",
+            "",
+        ).forEach { uri ->
+            val chunk = """
+                {"post_id":"1","creation_time":1000,"message":{"text":"a post"},
+                 "attachments":[{"styles":{"attachment":{"media":{"photo_image":{"uri":"$uri"}}}}}]}
+            """.trimIndent()
+
+            assertNull("uri was $uri", FeedJsonExtractor.extract(listOf(chunk)).single().imageUrl)
+        }
+    }
+
+    @Test
+    fun extract_firstPhotoWins_whenAStoryCarriesSeveral() {
+        val chunk = """
+            {"post_id":"1","creation_time":1000,"message":{"text":"a post"},
+             "attachments":[
+               {"styles":{"attachment":{"media":{"photo_image":{"uri":"https://scontent.a.fbcdn.net/first.jpg"}}}}},
+               {"styles":{"attachment":{"media":{"photo_image":{"uri":"https://scontent.a.fbcdn.net/second.jpg"}}}}}
+             ]}
+        """.trimIndent()
+
+        assertEquals(
+            "https://scontent.a.fbcdn.net/first.jpg",
+            FeedJsonExtractor.extract(listOf(chunk)).single().imageUrl,
+        )
+    }
+
+    @Test
+    fun extract_aPhotoWithoutAUri_isNoPhoto() {
+        val chunk = """
+            {"post_id":"1","creation_time":1000,"message":{"text":"a post"},
+             "attachments":[{"styles":{"attachment":{"media":{"photo_image":{"width":526}}}}}]}
+        """.trimIndent()
+
+        assertNull(FeedJsonExtractor.extract(listOf(chunk)).single().imageUrl)
     }
 
     @Test

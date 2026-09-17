@@ -70,10 +70,19 @@ object FeedJsonExtractor {
             null
         }
 
+    /**
+     * One row per post id, keeping the fullest text — and any photo, from whichever copy carried
+     * one. Facebook repeats a story several times inside one payload and the attachment does not
+     * hang off every copy, so the longest-text copy is not always the one with the photo on it.
+     */
     private fun dedupeKeepingLongestText(posts: List<RawPost>): List<RawPost> =
         posts.groupBy { it.postId }
             .values
-            .map { group -> group.maxBy { it.text.length } }
+            .map { group ->
+                val best = group.maxBy { it.text.length }
+                best.imageUrl?.let { return@map best }
+                best.copy(imageUrl = group.firstNotNullOfOrNull { it.imageUrl })
+            }
 
     /**
      * Walks the parsed tree looking for objects with a non-blank string `post_id`. When such an
@@ -98,6 +107,7 @@ object FeedJsonExtractor {
                                 createdAtApprox = false,
                                 text = text,
                                 url = Constants.postUrl(postId),
+                                imageUrl = findPhotoUri(element, depth),
                             ),
                         )
                         return
@@ -134,6 +144,45 @@ object FeedJsonExtractor {
             is JsonArray -> {
                 for (item in element) {
                     val nested = findLongInSubtree(item, key, depth + 1)
+                    if (nested != null) return nested
+                }
+            }
+            else -> Unit
+        }
+        return null
+    }
+
+    /**
+     * The post's photo, if it has one: the first `photo_image.uri` anywhere in the story's subtree.
+     *
+     * Facebook puts it at `attachments[].styles.attachment.media.photo_image {uri,width,height}`,
+     * but the story is repeated several times over inside one payload (a message container, a
+     * feedback container, a context layout) and the attachment hangs off more than one of them, so
+     * this searches the subtree rather than walking a fixed path — the same reason
+     * [findMessageText] does.
+     *
+     * A post carries at most one photo as far as this app is concerned: the card shows one image,
+     * and the first is the one Facebook shows first. Anything that is not plainly https on one of
+     * Facebook's own content hosts is dropped rather than kept ([MediaUrl]): this address is fetched
+     * later, unattended, from a background worker.
+     */
+    private fun findPhotoUri(element: JsonElement, depth: Int): String? {
+        if (depth > MAX_DEPTH) return null
+        when (element) {
+            is JsonObject -> {
+                for ((key, value) in element) {
+                    if (key == "photo_image" && value is JsonObject) {
+                        val uri = (value["uri"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                        val valid = MediaUrl.validate(uri)
+                        if (valid != null) return valid
+                    }
+                    val nested = findPhotoUri(value, depth + 1)
+                    if (nested != null) return nested
+                }
+            }
+            is JsonArray -> {
+                for (item in element) {
+                    val nested = findPhotoUri(item, depth + 1)
                     if (nested != null) return nested
                 }
             }

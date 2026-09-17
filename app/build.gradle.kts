@@ -91,6 +91,17 @@ android {
         unitTests.isIncludeAndroidResources = true
     }
 
+    sourceSets.getByName("debug") {
+        // Room's MigrationTestHelper reads the exported schemas from assets, and the APK the unit
+        // tests run against is built from the *debug variant's* assets — a `test` source set's
+        // assets are not merged into it. So the same `schemas/` directory KSP writes is added to
+        // the debug variant, which is what puts it in front of MigrationTest.
+        //
+        // Debug only, deliberately: the release APK has no business carrying a description of its
+        // own database, and `assembleRelease` is what the owner actually installs.
+        assets.srcDir("$projectDir/schemas")
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -133,6 +144,11 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // Test-only: the Room migration harness. Version 1 of this database is on the owner's phone
+    // and there is no backup of it anywhere, so every migration is run against a real version-1
+    // file in a JVM test before it can reach a release. See MigrationTest.
+    testImplementation(libs.room.testing)
 
     // Test-only: Task 8b JVM screenshot harness (Robolectric + Roborazzi). Renders the stateless
     // Compose screens under app/src/test to PNGs for design review — no production dependency.

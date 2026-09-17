@@ -11,7 +11,7 @@ import androidx.room.RoomDatabase
         ScrapeEntity::class,
         SightingEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
