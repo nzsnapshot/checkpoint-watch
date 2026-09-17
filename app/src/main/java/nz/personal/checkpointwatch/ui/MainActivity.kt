@@ -36,7 +36,8 @@ import nz.personal.checkpointwatch.ui.theme.CheckpointWatchTheme
  * the Activity, taking the WebView and the scan with it — and the two-minute throttle then
  * refuses to start the replacement, so a rotation could cost the owner a scan. Compose reads all
  * of these through `LocalConfiguration`, which is updated on `onConfigurationChanged`, so the
- * theme still follows the system's dark mode. (`themes.xml`'s `windowBackground` no longer
+ * theme still follows the system's dark mode — and [CheckpointWatchTheme] takes the system bars'
+ * icon contrast with it. (`themes.xml`'s `windowBackground` no longer
  * switches with `uiMode`, since that is resolved once at Activity creation — harmless: it is only
  * ever seen for the frame before Compose draws, and the opaque Surface covers it after that.)
  */
@@ -54,8 +55,10 @@ class MainActivity : ComponentActivity() {
     private var openHomeSignal by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Transparent bars, with the icon contrast following light/dark exactly as the Compose
-        // theme does, so the clock and the back gesture hint stay legible in both.
+        // Transparent bars and a window that lays out behind them. The icon contrast is set here
+        // for the first frame, and from then on belongs to CheckpointWatchTheme: with uiMode in
+        // configChanges this Activity is not recreated on a light/dark switch, so the bars have to
+        // follow the theme in place rather than being decided once, here.
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),

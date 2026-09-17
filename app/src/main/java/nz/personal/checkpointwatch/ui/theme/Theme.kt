@@ -1,12 +1,18 @@
 package nz.personal.checkpointwatch.ui.theme
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
 /**
  * Every Material role is filled explicitly. Leaving one out would fall back to the stock baseline
@@ -117,9 +123,47 @@ fun CheckpointWatchTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
+    SystemBarAppearance(darkTheme)
     MaterialTheme(
         colorScheme = if (darkTheme) CheckpointDarkColors else CheckpointLightColors,
         typography = AppTypography,
         content = content,
     )
+}
+
+/**
+ * Keeps the system bars' icons the opposite of whatever the app is currently painting behind them.
+ *
+ * `enableEdgeToEdge()` in the Activity sets this once, at creation, and that used to be enough:
+ * changing the system's light/dark setting recreated the Activity. It no longer does — `uiMode` is
+ * in the Activity's `configChanges`, so that a rotation cannot kill a scan — so the appearance has
+ * to follow the theme in place, or a live switch to light mode leaves white icons on a white
+ * background (and the clock and the back-gesture hint with them).
+ *
+ * Lives in the theme rather than in the Activity because the theme is the one thing that knows
+ * which half is in force, including when a preview or a screenshot test forces it.
+ *
+ * Silent when there is no window to talk to: a `@Preview` in the IDE, or any host that is not an
+ * Activity.
+ */
+@Composable
+private fun SystemBarAppearance(darkTheme: Boolean) {
+    val view = LocalView.current
+    if (view.isInEditMode) return
+    val window = view.context.findActivity()?.window ?: return
+    DisposableEffect(window, view, darkTheme) {
+        runCatching {
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
+        }
+        onDispose { }
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

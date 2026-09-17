@@ -11,8 +11,10 @@ without a Facebook account, extracts the road reports posted there, stores them
 in a local database, and shows them in its own UI. Facebook is never shown on
 screen.
 
-Distribution is a sideloaded APK (`adb install`). No Play Store, no Google
-services, no analytics, no network traffic other than to facebook.com.
+Distribution is a signed APK on a GitHub release, installed and updated through
+Obtainium. No Play Store, no Google services, no analytics, and no network
+traffic other than to Facebook's own servers — the page URL, plus the content
+hosts (`*.fbcdn.net` and similar) the page itself loads.
 
 ## Verified facts (spike, 2026-09-18)
 
@@ -130,14 +132,25 @@ Deliberately dumb; all interpretation happens in Kotlin where it is unit-tested.
    URL contains `/api/graphql` as message `{t:"json", body}`.
 2. On DOMContentLoaded, forward every `script[type="application/json"]` whose
    text contains `"post_id"` as `{t:"json", body}`.
-3. Loop (max 12 rounds, 1.5 s apart):
+3. Loop (max 24 rounds, 1.5 s apart, and a 38 s wall clock of its own so the
+   DOM fallback is always sent before Kotlin's 45 s budget expires):
    - if a dialog has `[aria-label="Close"]`, click it;
-   - if a dialog exists with no Close button → send `{t:"end", reason:"LOGIN_WALL"}` and stop;
+   - if only a closeless *sign-in* dialog is left → `LOGIN_WALL`, after it has
+     persisted 2 rounds once posts have been seen, or 8 rounds before any have
+     (a dialog whose Close button has not rendered yet must not end an empty
+     scan);
    - click any "See more" buttons inside top-level articles;
-   - scroll window to bottom;
-   - if top-level article count did not change for 3 rounds → `NO_MORE_POSTS`.
+   - scroll the window, and any `position:fixed` scroller pinned around
+     `[role=main]` while a dialog is up;
+   - if the top-level article count has not changed for **4** rounds (~6 s;
+     3 is too quick on mobile data) → `NO_MORE_POSTS`. An empty feed is never
+     given up on before round 10, whatever the stall counter says.
 4. Before ending, send `{t:"dom", posts:[{text, age, link}]}` for every
-   top-level `[role=article]` with text (fallback data).
+   top-level `[role=article]` with text (fallback data). `text` prefers the
+   message element (`[data-ad-preview="message"]` and its siblings) over the
+   whole article. Kotlin can also ask for this dump early, through
+   `window.__cwDump`, when its own timeout fires on a page that loaded too
+   slowly for the loop to finish.
 
 ### collect/FeedJsonExtractor (pure Kotlin)
 
@@ -157,8 +170,20 @@ Posts without text (pure photo/promo) are dropped.
 ### collect/DomPostExtractor (pure Kotlin, fallback)
 
 Used only when `FeedJsonExtractor` yields nothing. Converts `DomPost` to
-`RawPost`: `createdAt = scanTime − age` ("22m", "2h", "1d"; marked
-approximate), `postId = "dom:" + sha1(normalisedText).take(16)`.
+`RawPost`: `createdAt = scanTime − age` ("45s", "22m", "2h", "1d", "1w", "2y";
+marked approximate), `postId = "dom:" + sha1(normalisedText).take(16)`.
+
+The text is **cleaned first**, from the outside in, stopping at the first line
+that is not recognisable chrome: from the top the online-status lines, the
+page's own name, the relative age and separators; from the bottom reaction
+counts, "See more" and the Like/Comment/Share row. Whole lines only. Without
+this the hash moves every scan (the age line alone does it), so the same post
+reads as a new one each time and can never bridge onto the JSON feed's
+`message.text`. Nothing is dropped for being before the first report header —
+the author may write a line above it, and `ReportParser` keeps that.
+
+A scraped `link` is kept only if it is `https` on `facebook.com` or a
+subdomain; anything else falls back to the page URL.
 
 ### parse/ReportParser (pure Kotlin)
 
@@ -201,24 +226,38 @@ reports(
   road TEXT NULL, suburb TEXT NULL, details TEXT,
   reported_time_text TEXT NULL, reported_at INTEGER NULL, source TEXT NULL
 )
-post_revisions(id PK, post_id FK, text TEXT, replaced_at INTEGER)
+post_revisions(id PK, post_id FK→posts ON DELETE CASCADE, text TEXT, replaced_at INTEGER)
 scrapes(
   id INTEGER PK AUTOINCREMENT, started_at, finished_at,
   status TEXT,                      -- OK, OK_WITH_GAP, FAILED_NETWORK, FAILED_NO_DATA, CANCELLED
   end_reason TEXT, trigger TEXT, collector TEXT,
   posts_seen INTEGER, posts_new INTEGER, posts_updated INTEGER
 )
-scrape_sightings(scrape_id FK, post_id FK, PRIMARY KEY(scrape_id, post_id))
+scrape_sightings(
+  scrape_id FK→scrapes ON DELETE CASCADE,
+  post_id FK→posts ON DELETE CASCADE,
+  PRIMARY KEY(scrape_id, post_id)
+)
 ```
 
-Indexes: `posts(created_at)`, `reports(post_id)`, `reports(suburb)`,
-`reports(type)`.
+Indexes: `posts(created_at)`, `posts(text_hash)`, `reports(post_id)`,
+`reports(suburb)`, `reports(type)`, `post_revisions(post_id)`,
+`scrape_sightings(scrape_id)`, `scrape_sightings(post_id)` — the last three
+are what the foreign keys above need.
+
+**Retention** (`RetentionPolicy`, applied in the recorder's transaction after
+the scan's own writes): scrapes older than 30 days go, taking their sightings
+with them; posts go once they are *both* older than 180 days and unseen for
+180 days, taking their reports, revisions and sightings. There is no export
+and no backup, so both windows are deliberately generous.
 
 ### data/ScrapeRecorder (merge logic)
 
 One transaction per scan:
 
-1. Insert the `scrapes` row.
+1. Insert the `scrapes` row, with provisional counts (nothing may reference a
+   row that is not there yet); it is rewritten at the end with the real status
+   and counts.
 2. For each `RawPost` (newest first): match an existing post by `post_id`,
    else by `text_hash` within ±48 h of `created_at` (bridges JSON ↔ DOM
    fallback IDs).
@@ -230,7 +269,15 @@ One transaction per scan:
 3. **Gap rule:** if the database already had posts before this scan and none
    of this scan's posts matched an existing post, set `gap_before = 1` on the
    oldest post of this scan and use status `OK_WITH_GAP`.
-4. Zero posts extracted → `FAILED_NO_DATA`; nothing else changes.
+4. **Gap healing:** a scan is a contiguous newest-first slice of the feed, so
+   if this scan matched a post carrying `gap_before` *and* also contains a
+   post older than it, the far side of that gap is what we are now looking at:
+   clear the flag (including across the `dom:` → numeric bridge). Without
+   this, a one-post scan's gap marker would be permanent. Setting and healing
+   can never happen in the same scan — healing needs a match, and the gap rule
+   only fires when there were none.
+5. Zero posts extracted → `FAILED_NO_DATA`; nothing else changes.
+6. Apply the retention policy above.
 
 `ScrapeRecorder` depends on DAO interfaces so it is unit-testable with fakes.
 
@@ -392,5 +439,10 @@ UI is held to these rules:
 ## Out of scope
 
 Maps/geocoding, exact-time alarms or foreground services, comments and
-reactions, photos, other Facebook pages, logging in, export/backup, release
-signing beyond a debug-signed APK.
+reactions, photos, other Facebook pages, logging in, export/backup.
+
+Distribution is in scope and shipped: the APK is signed with a private release
+key (`keystore.properties`, never committed), attached to a GitHub release, and
+installed and updated through Obtainium. `assembleRelease` falls back to the
+debug key for local smoke builds; `packageReleaseApk` refuses to run without the
+real key, so a debug-signed APK can never reach `dist/` under a release name.

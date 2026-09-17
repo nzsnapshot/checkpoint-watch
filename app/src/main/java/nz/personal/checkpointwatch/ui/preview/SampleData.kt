@@ -346,6 +346,7 @@ object SampleData {
         ScanHistoryRow(3, minutesAgo(63), ScanTrigger.BACKGROUND, CollectorKind.HTTP, ScrapeStatus.OK_WITH_GAP, 1, 1, EndReason.TIMEOUT),
         ScanHistoryRow(4, minutesAgo(93), ScanTrigger.BACKGROUND, CollectorKind.NONE, ScrapeStatus.FAILED_NETWORK, 0, 0, EndReason.NETWORK_ERROR),
         ScanHistoryRow(5, minutesAgo(140), ScanTrigger.FOREGROUND, CollectorKind.WEBVIEW_DOM, ScrapeStatus.CANCELLED, 0, 4, EndReason.CANCELLED),
+        ScanHistoryRow(6, minutesAgo(170), ScanTrigger.BACKGROUND, CollectorKind.NONE, ScrapeStatus.FAILED_NO_DATA, 0, 0, EndReason.BLOCKED),
     )
 
     val settings: SettingsUiState = SettingsUiState(
