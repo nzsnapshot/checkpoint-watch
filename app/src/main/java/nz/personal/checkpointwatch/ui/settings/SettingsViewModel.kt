@@ -1,0 +1,218 @@
+package nz.personal.checkpointwatch.ui.settings
+
+import android.app.Application
+import android.content.Context
+import android.content.pm.PackageManager
+import androidx.annotation.StringRes
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import nz.personal.checkpointwatch.App
+import nz.personal.checkpointwatch.R
+import nz.personal.checkpointwatch.data.CollectorKind
+import nz.personal.checkpointwatch.data.ReportDao
+import nz.personal.checkpointwatch.data.ScanTrigger
+import nz.personal.checkpointwatch.data.ScrapeDao
+import nz.personal.checkpointwatch.data.ScrapeEntity
+import nz.personal.checkpointwatch.data.ScrapeStatus
+import nz.personal.checkpointwatch.model.ReportType
+import nz.personal.checkpointwatch.notify.Notifier
+import nz.personal.checkpointwatch.scan.BackgroundScheduler
+import nz.personal.checkpointwatch.settings.Settings
+import nz.personal.checkpointwatch.settings.SettingsStore
+import java.time.Instant
+
+/** How many past scans the settings screen shows. */
+private const val HISTORY_LIMIT = 10
+
+/** One past scan, as the history list shows it. */
+data class ScanHistoryRow(
+    val id: Long,
+    val startedAt: Instant,
+    val trigger: ScanTrigger,
+    val collector: CollectorKind,
+    val status: ScrapeStatus,
+    val new: Int,
+    val seen: Int,
+)
+
+/** Everything the settings screen renders. */
+data class SettingsUiState(
+    val settings: Settings,
+    val suburbs: List<String>,
+    val history: List<ScanHistoryRow>,
+    val version: String,
+    /**
+     * The owner asked for notifications but the system said no. Set by the screen, not the store:
+     * a refused permission is not a preference, so it is never written to disk.
+     */
+    val notificationsBlocked: Boolean = false,
+) {
+    companion object {
+        val Empty = SettingsUiState(
+            settings = Settings(),
+            suburbs = emptyList(),
+            history = emptyList(),
+            version = "",
+        )
+    }
+}
+
+/**
+ * The scan log's plain-English vocabulary, and the reading of the enum names the database stores.
+ *
+ * Pure and exhaustive: adding a status or a collector to the data layer will not compile until it
+ * has been given something to say here, which is the point — the history list exists to be honest
+ * about what happened, so a new outcome must never quietly read as a familiar one.
+ */
+object ScanHistoryUi {
+
+    fun rows(entities: List<ScrapeEntity>): List<ScanHistoryRow> = entities.map { entity ->
+        ScanHistoryRow(
+            id = entity.id,
+            startedAt = Instant.ofEpochMilli(entity.startedAt),
+            trigger = trigger(entity.trigger),
+            collector = collector(entity.collector),
+            status = status(entity.status),
+            new = entity.postsNew,
+            seen = entity.postsSeen,
+        )
+    }
+
+    /** An unreadable stored name means the row is from a version we do not understand. */
+    fun status(name: String): ScrapeStatus =
+        ScrapeStatus.entries.firstOrNull { it.name == name } ?: ScrapeStatus.FAILED_NO_DATA
+
+    fun trigger(name: String): ScanTrigger =
+        ScanTrigger.entries.firstOrNull { it.name == name } ?: ScanTrigger.BACKGROUND
+
+    fun collector(name: String): CollectorKind =
+        CollectorKind.entries.firstOrNull { it.name == name } ?: CollectorKind.NONE
+
+    @StringRes
+    fun statusLabel(status: ScrapeStatus): Int = when (status) {
+        ScrapeStatus.OK -> R.string.status_ok
+        ScrapeStatus.OK_WITH_GAP -> R.string.status_ok_with_gap
+        ScrapeStatus.FAILED_NETWORK -> R.string.status_failed_network
+        ScrapeStatus.FAILED_NO_DATA -> R.string.status_failed_no_data
+        ScrapeStatus.CANCELLED -> R.string.status_cancelled
+    }
+
+    @StringRes
+    fun triggerLabel(trigger: ScanTrigger): Int = when (trigger) {
+        ScanTrigger.FOREGROUND -> R.string.trigger_foreground
+        ScanTrigger.BACKGROUND -> R.string.trigger_background
+    }
+
+    @StringRes
+    fun collectorLabel(collector: CollectorKind): Int = when (collector) {
+        CollectorKind.WEBVIEW -> R.string.collector_webview
+        CollectorKind.WEBVIEW_DOM -> R.string.collector_webview_dom
+        CollectorKind.HTTP -> R.string.collector_http
+        CollectorKind.NONE -> R.string.collector_none
+    }
+}
+
+/** What each offered background interval is called. Pure, so the five buttons cannot disagree. */
+object IntervalUi {
+
+    @StringRes
+    fun label(minutes: Int): Int = when (minutes) {
+        0 -> R.string.settings_interval_off
+        15 -> R.string.settings_interval_15
+        30 -> R.string.settings_interval_30
+        60 -> R.string.settings_interval_60
+        120 -> R.string.settings_interval_120
+        // Unreachable: the row is built from ALLOWED_BACKGROUND_MINUTES, which is exactly these.
+        else -> R.string.settings_interval_off
+    }
+}
+
+/**
+ * The settings screen's state and the side effects its switches have: rescheduling background
+ * work, and making sure the notification channel exists before anything tries to post to it.
+ */
+class SettingsViewModel(
+    private val appContext: Context,
+    private val settingsStore: SettingsStore,
+    private val notifier: Notifier,
+    scrapeDao: ScrapeDao,
+    reportDao: ReportDao,
+) : ViewModel() {
+
+    private val version: String = readVersion(appContext)
+
+    val uiState: StateFlow<SettingsUiState> = combine(
+        settingsStore.settings,
+        scrapeDao.observeRecent(HISTORY_LIMIT),
+        reportDao.observeSuburbs(),
+    ) { settings, scrapes, suburbs ->
+        SettingsUiState(
+            settings = settings,
+            suburbs = suburbs,
+            history = ScanHistoryUi.rows(scrapes),
+            version = version,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState.Empty)
+
+    /**
+     * Persists the interval and then re-applies the schedule. Both, always: a stored interval that
+     * WorkManager never heard about is a setting that silently does nothing.
+     */
+    fun setInterval(minutes: Int) {
+        viewModelScope.launch {
+            settingsStore.update { it.copy(backgroundMinutes = minutes) }
+            BackgroundScheduler.apply(appContext, minutes)
+        }
+    }
+
+    /**
+     * Called the instant the switch is flipped on, before the permission is asked for, so the
+     * owner has a "New reports" category to tune in system settings rather than an app that claims
+     * to notify and shows nothing there.
+     */
+    fun prepareNotifications() = notifier.ensureChannel()
+
+    fun setNotify(enabled: Boolean) {
+        if (enabled) notifier.ensureChannel()
+        viewModelScope.launch { settingsStore.update { it.copy(notify = enabled) } }
+    }
+
+    fun toggleNotifyType(type: ReportType) {
+        viewModelScope.launch {
+            settingsStore.update { current ->
+                val types = current.notifyTypes
+                current.copy(notifyTypes = if (type in types) types - type else types + type)
+            }
+        }
+    }
+
+    fun setWatchedSuburbs(suburbs: Set<String>) {
+        viewModelScope.launch { settingsStore.update { it.copy(watchedSuburbs = suburbs) } }
+    }
+
+    private fun readVersion(context: Context): String = try {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+    } catch (_: PackageManager.NameNotFoundException) {
+        ""
+    }
+
+    class Factory(private val application: Application) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            val container = (application as App).container
+            return SettingsViewModel(
+                appContext = application,
+                settingsStore = container.settings,
+                notifier = container.notifier,
+                scrapeDao = container.scrapeDao,
+                reportDao = container.reportDao,
+            ) as T
+        }
+    }
+}

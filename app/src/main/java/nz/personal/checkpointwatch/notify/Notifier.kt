@@ -34,6 +34,22 @@ class Notifier(context: Context) {
 
     private val context = context.applicationContext
 
+    /**
+     * Creates the channel, so it is there the moment the owner switches notifications on rather
+     * than only after the first background scan happens to find something. Until the channel
+     * exists, the system's own notification settings for this app have nothing to show and no
+     * "New reports" category to tune, which makes the switch look like it did nothing.
+     *
+     * Creating a channel that already exists is a no-op, so this is safe to call every time.
+     */
+    fun ensureChannel() {
+        NotificationManagerCompat.from(context).createNotificationChannel(
+            NotificationChannelCompat.Builder(CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_DEFAULT)
+                .setName(CHANNEL_NAME)
+                .build(),
+        )
+    }
+
     fun show(plan: NotificationPlanner.Plan?) {
         if (plan == null || plan.lines.isEmpty()) return
 
@@ -46,11 +62,7 @@ class Notifier(context: Context) {
             return
         }
 
-        manager.createNotificationChannel(
-            NotificationChannelCompat.Builder(CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_DEFAULT)
-                .setName(CHANNEL_NAME)
-                .build(),
-        )
+        ensureChannel()
 
         val style = NotificationCompat.InboxStyle().setBigContentTitle(plan.title)
         plan.lines.forEach(style::addLine)
