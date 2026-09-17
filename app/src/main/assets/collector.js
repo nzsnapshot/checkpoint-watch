@@ -14,35 +14,55 @@
  *
  * Plain ES2017, no page globals other than the two install guards, everything in try/catch: a
  * throw here would be a scan that silently collects nothing.
+ *
+ * The pure decision helpers (isAgeText, dialogDecision) are exported when this file is loaded by
+ * node, so they can be tested without a browser: see app/src/test/js/collector.test.js.
  */
 (function () {
   'use strict';
 
-  try {
-    if (window.__cwInstalled) {
+  var IN_BROWSER = typeof window !== 'undefined' && typeof document !== 'undefined';
+
+  if (IN_BROWSER) {
+    try {
+      if (window.__cwInstalled) {
+        return;
+      }
+      window.__cwInstalled = true;
+      // Document-start injection also runs in every same-origin iframe Facebook creates. Only the
+      // top document has the feed, and only it should scroll, scrape or post messages.
+      if (window.top !== window) {
+        return;
+      }
+    } catch (e) {
       return;
     }
-    window.__cwInstalled = true;
-  } catch (e) {
-    return;
   }
 
   var MAX_BODY = 3 * 1024 * 1024; // bodies bigger than this are not a feed response
-  var MAX_QUEUED = 64;
+  var MAX_QUEUED_CHARS = 6 * 1024 * 1024; // pre-bridge queue, bounded by size rather than count
   var ROUND_MS = 1500;
-  var MAX_ROUNDS = 12;
+  var MAX_ROUNDS = 24; // 24 x 1.5 s ~ 36 s, inside Kotlin's 45 s scan budget
   var STALL_ROUNDS = 3;
+  var MIN_ROUNDS_BEFORE_EMPTY_STOP = 10; // never give up on an empty feed in the first ~15 s
+  var WALL_ROUNDS = 3; // a closeless dialog before any post must persist this long to be the wall
+  var MAX_FAILED_ROUNDS = 5;
   var MAX_DOM_POSTS = 40;
   var MAX_DOM_TEXT = 20000;
+  var MAX_AGE_TEXT = 16;
   var POST_ID = '"post_id"';
 
   var ended = false;
   var queue = [];
+  var queuedChars = 0;
   var flushTimer = null;
   var roundTimer = null;
   var rounds = 0;
   var lastCount = -1;
   var stalled = 0;
+  var sawArticles = false;
+  var wallRounds = 0;
+  var failedRounds = 0;
 
   // ---------------------------------------------------------------- bridge
 
@@ -66,8 +86,10 @@
         if (!postNow(queue[0])) {
           return;
         }
+        queuedChars -= queue[0].length;
         queue.shift();
       }
+      queuedChars = 0;
       if (flushTimer !== null) {
         clearInterval(flushTimer);
         flushTimer = null;
@@ -86,8 +108,9 @@
       if (queue.length === 0 && postNow(text)) {
         return;
       }
-      if (queue.length < MAX_QUEUED) {
+      if (queuedChars + text.length <= MAX_QUEUED_CHARS) {
         queue.push(text);
+        queuedChars += text.length;
       }
       if (flushTimer === null) {
         flushTimer = setInterval(flush, 200);
@@ -158,7 +181,7 @@
       };
     }
   } catch (e) {
-    // ignore
+    // not a browser, or no XMLHttpRequest: nothing to wrap
   }
 
   try {
@@ -193,7 +216,7 @@
       };
     }
   } catch (e) {
-    // ignore
+    // not a browser, or no fetch: nothing to wrap
   }
 
   // ------------------------------------------------------- initial payload
@@ -225,13 +248,101 @@
 
   // ------------------------------------------------------------------ DOM
 
-  function isVisible(element) {
+  function isTrulyVisible(element) {
     try {
       var rect = element.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
+      if (!rect || rect.width <= 0 || rect.height <= 0) {
+        return false;
+      }
+      if (element.getAttribute && element.getAttribute('aria-hidden') === 'true') {
+        return false;
+      }
+      var style = window.getComputedStyle(element);
+      if (!style) {
+        return true;
+      }
+      if (style.display === 'none' || style.visibility === 'hidden') {
+        return false;
+      }
+      var opacity = parseFloat(style.opacity);
+      return isNaN(opacity) || opacity > 0.05;
     } catch (e) {
       return false;
     }
+  }
+
+  // A dialog is the hard login wall only if it is actually asking us to sign in.
+  function hasLoginSignal(dialog) {
+    try {
+      if (dialog.querySelector('input[type="password"]')) {
+        return true;
+      }
+      if (dialog.querySelector('form[action*="login"], a[href*="/login"], a[href*="login.php"]')) {
+        return true;
+      }
+      var text = (dialog.innerText || '').toLowerCase();
+      return text.indexOf('log in') !== -1 || text.indexOf('log into') !== -1 || text.indexOf('sign up') !== -1;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * Pure decision over the facts gathered from every dialog on the page.
+   * facts: [{ visible: boolean, hasClose: boolean, loginSignal: boolean }]
+   * Returns 'closed' (something was closable), 'wall' (only a closeless sign-in dialog), 'none'.
+   */
+  function dialogDecision(facts) {
+    var closed = false;
+    var wall = false;
+    try {
+      for (var i = 0; i < facts.length; i++) {
+        var fact = facts[i] || {};
+        if (!fact.visible) {
+          continue;
+        }
+        if (fact.hasClose) {
+          closed = true;
+        } else if (fact.loginSignal) {
+          wall = true;
+        }
+      }
+    } catch (e) {
+      return 'none';
+    }
+    if (closed) {
+      return 'closed';
+    }
+    return wall ? 'wall' : 'none';
+  }
+
+  // Looks at EVERY dialog, clicks every Close it finds, and reports what is left.
+  function handleDialogs() {
+    var facts = [];
+    try {
+      var dialogs = document.querySelectorAll('[role="dialog"]');
+      for (var i = 0; i < dialogs.length; i++) {
+        try {
+          var dialog = dialogs[i];
+          var visible = isTrulyVisible(dialog);
+          var close = visible ? dialog.querySelector('[aria-label="Close"]') : null;
+          if (close) {
+            // The real button has to be clicked: hiding the dialog does not unlock the feed.
+            close.click();
+          }
+          facts.push({
+            visible: visible,
+            hasClose: !!close,
+            loginSignal: visible && !close ? hasLoginSignal(dialog) : false
+          });
+        } catch (e) {
+          // skip this dialog
+        }
+      }
+    } catch (e) {
+      return 'none';
+    }
+    return dialogDecision(facts);
   }
 
   function topLevelArticles() {
@@ -259,34 +370,6 @@
       // ignore
     }
     return articles;
-  }
-
-  // 'none' | 'closed' | 'wall'
-  function handleDialogs() {
-    var result = 'none';
-    try {
-      var dialogs = document.querySelectorAll('[role="dialog"]');
-      for (var i = 0; i < dialogs.length; i++) {
-        try {
-          var dialog = dialogs[i];
-          if (!isVisible(dialog)) {
-            continue;
-          }
-          var close = dialog.querySelector('[aria-label="Close"]');
-          if (!close) {
-            // The second dialog has no way out: this is the hard login wall.
-            return 'wall';
-          }
-          close.click();
-          result = 'closed';
-        } catch (e) {
-          // skip this dialog
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-    return result;
   }
 
   function expandSeeMore(articles) {
@@ -347,14 +430,34 @@
     }
   }
 
-  var AGE_PATTERN = /^(just now|\d+\s*[smhdwy][a-z]*(\s+ago)?)$/i;
+  var AGE_PATTERN = new RegExp(
+    '^(just now|\\d+\\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|' +
+      'd|day|days|w|wk|wks|week|weeks|y|yr|yrs|year|years)(\\s+ago)?)$',
+    'i'
+  );
+
+  /** Pure: is this the short relative age Facebook puts in a post header ("22m", "2 hrs ago")? */
+  function isAgeText(text) {
+    try {
+      if (typeof text !== 'string') {
+        return false;
+      }
+      var trimmed = text.trim();
+      if (trimmed.length === 0 || trimmed.length > MAX_AGE_TEXT) {
+        return false;
+      }
+      return AGE_PATTERN.test(trimmed);
+    } catch (e) {
+      return false;
+    }
+  }
 
   function articleAge(article) {
     try {
       var links = article.querySelectorAll('a[href]');
       for (var i = 0; i < links.length; i++) {
         var text = (links[i].innerText || '').trim();
-        if (text.length > 0 && text.length <= 12 && AGE_PATTERN.test(text)) {
+        if (isAgeText(text)) {
           return text;
         }
       }
@@ -368,7 +471,7 @@
     try {
       var anchor = article.querySelector('a[href*="/posts/"]');
       if (anchor && anchor.href) {
-        return String(anchor.href).split('?')[0];
+        return String(anchor.href).split('?')[0].split('#')[0];
       }
     } catch (e) {
       // ignore
@@ -427,19 +530,27 @@
   }
 
   function round() {
+    if (ended) {
+      stopLoop();
+      return;
+    }
     try {
-      if (ended) {
-        stopLoop();
-        return;
-      }
       rounds++;
 
-      if (handleDialogs() === 'wall') {
+      var dialogState = handleDialogs();
+      var articles = topLevelArticles();
+      if (articles.length > 0) {
+        sawArticles = true;
+      }
+
+      // A closeless sign-in dialog is the terminal wall once posts have been seen. Before any post
+      // it may just be the page still settling, so it has to persist for a few rounds.
+      wallRounds = dialogState === 'wall' ? wallRounds + 1 : 0;
+      if (wallRounds > 0 && (sawArticles || wallRounds >= WALL_ROUNDS)) {
         finish('LOGIN_WALL');
         return;
       }
 
-      var articles = topLevelArticles();
       expandSeeMore(articles);
       scrollAll();
 
@@ -450,14 +561,24 @@
         lastCount = articles.length;
       }
 
-      if (stalled >= STALL_ROUNDS || rounds >= MAX_ROUNDS) {
+      // An empty feed is not a finished feed: never stop on "no change" until a post has been seen
+      // or the page has had a fair go at loading one.
+      var mayStopOnStall = sawArticles || rounds >= MIN_ROUNDS_BEFORE_EMPTY_STOP;
+      if ((mayStopOnStall && stalled >= STALL_ROUNDS) || rounds >= MAX_ROUNDS) {
         finish('NO_MORE_POSTS');
+        return;
       }
+      failedRounds = 0;
     } catch (e) {
-      try {
-        finish('NO_MORE_POSTS');
-      } catch (e2) {
-        // ignore
+      // One bad round (a detached node, a selector Facebook changed) skips; only a run of them
+      // means this page is not one we can work with.
+      failedRounds++;
+      if (failedRounds >= MAX_FAILED_ROUNDS) {
+        try {
+          finish('NO_MORE_POSTS');
+        } catch (e2) {
+          // ignore
+        }
       }
     }
   }
@@ -483,6 +604,14 @@
     } else {
       document.addEventListener('DOMContentLoaded', start);
       window.addEventListener('load', start);
+    }
+  } catch (e) {
+    // not a browser: nothing to start
+  }
+
+  try {
+    if (typeof module !== 'undefined' && module.exports) {
+      module.exports = { isAgeText: isAgeText, dialogDecision: dialogDecision };
     }
   } catch (e) {
     // ignore

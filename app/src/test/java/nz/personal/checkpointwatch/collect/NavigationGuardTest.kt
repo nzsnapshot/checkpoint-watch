@@ -77,4 +77,61 @@ class NavigationGuardTest {
         assertFalse(looksLikeLoginRedirect("https://www.facebook.com/CheckpointNZ/posts/123"))
         assertFalse(looksLikeLoginRedirect(null))
     }
+
+    @Test
+    fun looksLikeLoginRedirect_recognisesThePhpForms() {
+        // These are what Facebook actually redirects a logged-out visitor to.
+        assertTrue(looksLikeLoginRedirect("https://www.facebook.com/login.php?next=https%3A%2F%2Fwww.facebook.com"))
+        assertTrue(looksLikeLoginRedirect("https://www.facebook.com/checkpoint.php"))
+        assertTrue(looksLikeLoginRedirect("https://www.facebook.com/recover.php?u=1"))
+        assertTrue(looksLikeLoginRedirect("https://www.facebook.com/reg.php"))
+        assertTrue(looksLikeLoginRedirect("https://www.facebook.com/login.php/extra"))
+        assertTrue(looksLikeLoginRedirect("https://m.facebook.com/login/device-based/regular/login/"))
+    }
+
+    @Test
+    fun looksLikeLoginRedirect_doesNotMatchThePageItself() {
+        assertFalse(looksLikeLoginRedirect(Constants.PAGE_URL))
+        assertFalse(looksLikeLoginRedirect("https://www.facebook.com/CheckpointNZ/"))
+        assertFalse(looksLikeLoginRedirect("https://www.facebook.com/logins"))
+        assertFalse(looksLikeLoginRedirect("https://www.facebook.com/registry"))
+    }
+
+    @Test
+    fun isFacebookHost_matchesTheSiteAndItsSubdomains() {
+        assertTrue(isFacebookHost("www.facebook.com"))
+        assertTrue(isFacebookHost("facebook.com"))
+        assertTrue(isFacebookHost("m.facebook.com"))
+        assertTrue(isFacebookHost("WWW.FACEBOOK.COM"))
+        assertFalse(isFacebookHost("facebook.com.evil.example"))
+        assertFalse(isFacebookHost("notfacebook.com"))
+        assertFalse(isFacebookHost(null))
+    }
+
+    @Test
+    fun endsScanAsBlocked_anyFacebookPageOtherThanOurs_endsTheScan() {
+        // Otherwise a blocked redirect leaves the scan idling until the 45 s timeout.
+        assertTrue(endsScanAsBlocked("https://www.facebook.com/login.php?next=x"))
+        assertTrue(endsScanAsBlocked("https://www.facebook.com/checkpoint/1501092823525282/"))
+        assertTrue(endsScanAsBlocked("https://m.facebook.com/CheckpointNZ"))
+        assertTrue(endsScanAsBlocked("http://www.facebook.com/CheckpointNZ"))
+        assertTrue(endsScanAsBlocked("https://www.facebook.com/"))
+    }
+
+    @Test
+    fun endsScanAsBlocked_loginPageOnAnotherFacebookProperty_endsTheScan() {
+        assertTrue(endsScanAsBlocked("https://www.messenger.com/login.php"))
+    }
+
+    @Test
+    fun endsScanAsBlocked_thePageItselfAndNonWebUrls_doNot() {
+        assertFalse(endsScanAsBlocked(Constants.PAGE_URL))
+        assertFalse(endsScanAsBlocked("https://www.facebook.com/CheckpointNZ/?ref=x"))
+        assertFalse(endsScanAsBlocked("about:blank"))
+        // App links are blocked, but they are not Facebook refusing us: the scan carries on.
+        assertFalse(endsScanAsBlocked("intent://www.facebook.com/CheckpointNZ#Intent;scheme=https;end"))
+        assertFalse(endsScanAsBlocked("market://details?id=com.facebook.katana"))
+        assertFalse(endsScanAsBlocked("https://example.com/whatever"))
+        assertFalse(endsScanAsBlocked(null))
+    }
 }

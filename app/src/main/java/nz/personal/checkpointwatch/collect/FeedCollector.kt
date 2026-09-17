@@ -6,6 +6,8 @@ import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
+import android.os.Handler
+import android.os.Looper
 import android.os.Message
 import android.view.View
 import android.webkit.CookieManager
@@ -34,10 +36,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
 import nz.personal.checkpointwatch.Constants
 import java.net.URI
+import kotlin.coroutines.resume
 
 /** Origin the collector talks to; both the message listener and the injected script are tied to it. */
 private const val FACEBOOK_ORIGIN = "https://www.facebook.com"
@@ -53,15 +58,25 @@ private const val PAGE_LOAD_TIMEOUT_MS = 20_000L
 /** Hard ceiling on a whole scan; whatever was captured by then is kept. */
 private const val SCAN_TIMEOUT_MS = 45_000L
 
-/** Ceiling on buffered JSON, in characters (~8 MB of ASCII). Chunks past it are dropped. */
-private const val MAX_BUFFERED_CHARS = 8L * 1024 * 1024
+/**
+ * Ceiling on buffered JSON: 4 M UTF-16 characters, which is about 8 MB of heap. Chunks that would
+ * cross it are dropped and the scan carries on with what it has.
+ */
+private const val MAX_BUFFERED_CHARS = 4L * 1024 * 1024
 
-private val LOGIN_PATH_PREFIXES = listOf(
+/** How long to wait for the cookie store to confirm it is empty before giving up on the callback. */
+private const val COOKIE_CLEAR_TIMEOUT_MS = 2_000L
+
+/**
+ * Path roots of Facebook's sign-in flows. Each matches on its own, with a `.php` suffix (the form
+ * Facebook actually redirects logged-out visitors to), or as a path segment with more after it.
+ */
+private val LOGIN_PATH_ROOTS = listOf(
     "/login",
     "/checkpoint",
-    "/r.php",
-    "/reg",
     "/recover",
+    "/reg",
+    "/r",
     "/privacy/consent",
     "/dialog/oauth",
 )
@@ -85,8 +100,35 @@ internal fun isAllowedNavigation(url: String?): Boolean {
 
 /** Whether a blocked navigation looks like Facebook demanding an account rather than a stray link. */
 internal fun looksLikeLoginRedirect(url: String?): Boolean {
-    val path = url?.toUriOrNull()?.path?.lowercase() ?: return false
-    return LOGIN_PATH_PREFIXES.any { path == it || path.startsWith("$it/") }
+    val path = url?.toUriOrNull()?.path?.lowercase()?.trimEnd('/') ?: return false
+    return LOGIN_PATH_ROOTS.any { root ->
+        path == root ||
+            path == "$root.php" ||
+            path.startsWith("$root/") ||
+            path.startsWith("$root.php/")
+    }
+}
+
+/** `facebook.com` itself or any subdomain of it, and nothing that merely looks like one. */
+internal fun isFacebookHost(host: String?): Boolean {
+    val lower = host?.lowercase() ?: return false
+    return lower == "facebook.com" || lower.endsWith(".facebook.com")
+}
+
+/**
+ * Whether a blocked main-frame navigation should end the scan as [EndReason.BLOCKED].
+ *
+ * Any http(s) navigation to a Facebook host that is not our page is Facebook refusing to show the
+ * feed (a login, checkpoint or consent redirect), so the scan ends at once instead of idling until
+ * the 45 s timeout. A sign-in page on another property counts too. App links (`intent:`, `market:`)
+ * and unrelated sites are simply blocked and the scan carries on.
+ */
+internal fun endsScanAsBlocked(url: String?): Boolean {
+    if (isAllowedNavigation(url)) return false
+    val uri = url?.toUriOrNull() ?: return false
+    val isWeb = uri.scheme.equals("https", ignoreCase = true) || uri.scheme.equals("http", ignoreCase = true)
+    if (!isWeb) return false
+    return isFacebookHost(uri.host) || looksLikeLoginRedirect(url)
 }
 
 private fun String.toUriOrNull(): URI? = try {
@@ -121,7 +163,13 @@ class FeedCollector(private val appContext: Context) {
         // posts visible through snapshot() as if they were this run's.
         reset()
         val script = withContext(Dispatchers.IO) { CollectorScript.load(appContext) }
-        return withContext(Dispatchers.Main.immediate) { runScan(host, script) }
+        // Dispatchers.Main, deliberately NOT Main.immediate. The scan ends when a WebView callback
+        // completes `done`; with .immediate that resumption (and therefore teardown — stopLoading,
+        // detach, destroy) would run undispatched, on the stack of the very native callback that is
+        // still executing, which destroys the WebView from inside its own engine callback. Plain
+        // Main always dispatches, so the scan resumes on a later main-loop turn, after the callback
+        // has returned into Chromium.
+        return withContext(Dispatchers.Main) { runScan(host, script) }
     }
 
     /**
@@ -183,7 +231,7 @@ class FeedCollector(private val appContext: Context) {
 
             loadWatchdog = launch {
                 delay(PAGE_LOAD_TIMEOUT_MS)
-                if (!session.progressed) done.complete(EndReason.NETWORK_ERROR)
+                if (!session.progressed) session.endWith(EndReason.NETWORK_ERROR)
             }
 
             finish(withTimeoutOrNull(SCAN_TIMEOUT_MS) { done.await() } ?: EndReason.TIMEOUT)
@@ -197,7 +245,12 @@ class FeedCollector(private val appContext: Context) {
             return snapshot()
         } finally {
             loadWatchdog?.cancel()
-            withContext(NonCancellable) { session.teardown() }
+            withContext(NonCancellable) {
+                // One more main-loop turn before destroying anything, so that a callback which is
+                // still on the stack (or a posted completion) is well clear of the WebView.
+                yield()
+                session.teardown()
+            }
         }
     }
 
@@ -231,13 +284,26 @@ class FeedCollector(private val appContext: Context) {
         domPosts = posts
     }
 
-    private fun clearBrowsingData() {
-        // Every scan is a brand-new logged-out visitor: no carried-over cookies, no storage.
+    /**
+     * Every scan is a brand-new logged-out visitor: no carried-over cookies, no storage.
+     *
+     * Cookie removal is asynchronous, so this waits for its callback (and the flush) before the
+     * page is loaded — otherwise the load can race the wipe and carry the last scan's session.
+     */
+    private suspend fun clearBrowsingData() {
         try {
             val cookies = CookieManager.getInstance()
-            cookies.removeAllCookies(null)
+            withTimeoutOrNull(COOKIE_CLEAR_TIMEOUT_MS) {
+                suspendCancellableCoroutine { continuation ->
+                    cookies.removeAllCookies { _ ->
+                        if (continuation.isActive) continuation.resume(Unit)
+                    }
+                }
+            }
             cookies.flush()
             WebStorage.getInstance().deleteAllData()
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             // A missing or updating WebView provider must not take the scan down on its own; the
             // load below will end the scan with NETWORK_ERROR if the provider really is unusable.
@@ -293,6 +359,20 @@ class FeedCollector(private val appContext: Context) {
         private val host: WebViewHost,
         private val done: CompletableDeferred<EndReason>,
     ) {
+        private val mainHandler = Handler(Looper.getMainLooper())
+
+        /**
+         * Ends the scan from a WebView callback.
+         *
+         * Completing [done] resumes the scan, and the scan's `finally` destroys this WebView, so
+         * the completion is posted: it must never happen on the stack of the engine callback that
+         * is asking for it. Calling this twice is harmless; the first reason wins.
+         */
+        fun endWith(reason: EndReason) {
+            if (done.isCompleted) return
+            mainHandler.post { done.complete(reason) }
+        }
+
         /** Set once the page load or the script shows a sign of life; read by the load watchdog. */
         @Volatile
         var progressed: Boolean = false
@@ -358,7 +438,7 @@ class FeedCollector(private val appContext: Context) {
                 if (request?.isForMainFrame != true) return false
                 val url = request.url?.toString()
                 if (isAllowedNavigation(url)) return false
-                if (looksLikeLoginRedirect(url)) done.complete(EndReason.BLOCKED)
+                if (endsScanAsBlocked(url)) endWith(EndReason.BLOCKED)
                 return true
             }
 
@@ -376,7 +456,7 @@ class FeedCollector(private val appContext: Context) {
                 request: WebResourceRequest?,
                 error: WebResourceError?,
             ) {
-                if (request?.isForMainFrame == true) done.complete(EndReason.NETWORK_ERROR)
+                if (request?.isForMainFrame == true) endWith(EndReason.NETWORK_ERROR)
             }
 
             override fun onReceivedHttpError(
@@ -387,19 +467,20 @@ class FeedCollector(private val appContext: Context) {
                 // Facebook answering a main-frame request with 4xx/5xx is it refusing us, not the
                 // network failing: recorded as BLOCKED so the scrape log tells the two apart.
                 if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 0) >= 400) {
-                    done.complete(EndReason.BLOCKED)
+                    endWith(EndReason.BLOCKED)
                 }
             }
 
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                // Cancel first: ending the scan tears the WebView down, and the handler belongs to it.
                 handler?.cancel()
-                done.complete(EndReason.NETWORK_ERROR)
+                endWith(EndReason.NETWORK_ERROR)
             }
 
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 // Returning true keeps the app alive. The WebView is unusable from here, so it is
                 // detached and destroyed at once and a fresh one is built for the next scan.
-                done.complete(EndReason.NETWORK_ERROR)
+                endWith(EndReason.NETWORK_ERROR)
                 teardown()
                 return true
             }
@@ -411,7 +492,7 @@ class FeedCollector(private val appContext: Context) {
             when (val decoded = CollectorMessage.decode(raw)) {
                 is CollectorMessage.JsonChunk -> addChunk(decoded.body)
                 is CollectorMessage.Dom -> setDomPosts(decoded.posts)
-                is CollectorMessage.End -> done.complete(decoded.reason)
+                is CollectorMessage.End -> endWith(decoded.reason)
                 null -> Unit // Unrecognised payload: ignored, never fatal.
             }
         }
