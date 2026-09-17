@@ -137,6 +137,14 @@
     <string name="collector_http">Newest post only</string>
     <string name="collector_none">Nothing collected</string>
 
+    <!-- Settings: scan details. The hidden WebView cannot be inspected from outside the app, so
+         this is the one way the owner can send evidence of a scan that went wrong. -->
+    <string name="settings_details_label">Scan details</string>
+    <string name="settings_details_body">Technical details of the most recent scan. Contains no personal information.</string>
+    <string name="settings_details_copy_foreground">Copy last scan</string>
+    <string name="settings_details_copy_background">Copy last background scan</string>
+    <string name="settings_details_copied">Copied — paste it into a message</string>
+
     <!-- Settings: about -->
     <string name="settings_about_header">About</string>
     <string name="settings_about_source_label">Data source</string>

@@ -354,6 +354,8 @@ object SampleData {
         suburbs = suburbs,
         history = history,
         version = "1.0",
+        hasForegroundDetails = true,
+        hasBackgroundDetails = true,
     )
 
     /** Background updates off, notifications off: the defaults, and every hint switched on. */

@@ -4,6 +4,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -14,6 +16,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -22,12 +26,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import nz.personal.checkpointwatch.Constants
 import nz.personal.checkpointwatch.R
+import nz.personal.checkpointwatch.data.ScanTrigger
 import nz.personal.checkpointwatch.ui.CwIcons
 import nz.personal.checkpointwatch.ui.TimeFormat
 import nz.personal.checkpointwatch.ui.theme.isDarkScheme
 
 @Composable
-internal fun HistorySection(state: SettingsUiState) {
+internal fun HistorySection(state: SettingsUiState, onCopyDetails: (ScanTrigger) -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Section(title = stringResource(R.string.settings_history_header), icon = CwIcons.Radar) {
         Text(
@@ -45,6 +50,48 @@ internal fun HistorySection(state: SettingsUiState) {
         state.history.forEachIndexed { index, row ->
             if (index > 0) HorizontalDivider(color = scheme.outlineVariant)
             ScanHistoryItem(row)
+        }
+        ScanDetails(state, onCopyDetails)
+    }
+}
+
+/**
+ * The evidence row. A scan happens inside a WebView nobody can see, on a phone that is not
+ * plugged into anything, so when one comes back with one post the only way to find out why is for
+ * the owner to copy the app's own account of it out and send it.
+ *
+ * Each button is only offered once there is something behind it: a button that copies nothing and
+ * says "Copied" would be worse than no button.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ScanDetails(state: SettingsUiState, onCopyDetails: (ScanTrigger) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    HorizontalDivider(color = scheme.outlineVariant)
+    Text(
+        text = stringResource(R.string.settings_details_label),
+        style = MaterialTheme.typography.titleSmall,
+        color = scheme.onSurface,
+    )
+    Text(
+        text = stringResource(R.string.settings_details_body),
+        style = MaterialTheme.typography.bodySmall,
+        color = scheme.onSurfaceVariant,
+    )
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(
+            onClick = { onCopyDetails(ScanTrigger.FOREGROUND) },
+            enabled = state.hasForegroundDetails,
+            modifier = Modifier.minimumInteractiveComponentSize(),
+        ) {
+            Text(stringResource(R.string.settings_details_copy_foreground))
+        }
+        TextButton(
+            onClick = { onCopyDetails(ScanTrigger.BACKGROUND) },
+            enabled = state.hasBackgroundDetails,
+            modifier = Modifier.minimumInteractiveComponentSize(),
+        ) {
+            Text(stringResource(R.string.settings_details_copy_background))
         }
     }
 }

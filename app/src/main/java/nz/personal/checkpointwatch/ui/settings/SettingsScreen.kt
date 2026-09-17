@@ -24,6 +24,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -36,6 +38,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,7 +49,9 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import nz.personal.checkpointwatch.R
+import nz.personal.checkpointwatch.data.ScanTrigger
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.scan.ALLOWED_BACKGROUND_MINUTES
 import nz.personal.checkpointwatch.ui.CwIcons
@@ -79,6 +84,8 @@ data class SettingsCallbacks(
     val onClearWatchedSuburbs: () -> Unit,
     val onBatterySettings: () -> Unit,
     val onNotificationSettings: () -> Unit,
+    /** Puts the stored diagnostics for that kind of scan on the clipboard. */
+    val onCopyDetails: (ScanTrigger) -> Unit,
 )
 
 /**
@@ -94,9 +101,16 @@ fun SettingsContent(
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
+    // The one thing on this screen that happens rather than is: copying leaves nothing on the
+    // screen to show for itself, so the screen has to say so.
+    val copied = remember { SnackbarHostState() }
+    val copiedMessage = stringResource(R.string.settings_details_copied)
+    val scope = rememberCoroutineScope()
+
     Scaffold(
         modifier = modifier,
         containerColor = scheme.background,
+        snackbarHost = { SnackbarHost(copied) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.settings_title)) },
@@ -129,7 +143,13 @@ fun SettingsContent(
             ) {
                 BackgroundSection(state, callbacks)
                 NotificationsSection(state, callbacks)
-                HistorySection(state)
+                HistorySection(state) { trigger ->
+                    callbacks.onCopyDetails(trigger)
+                    scope.launch {
+                        copied.currentSnackbarData?.dismiss()
+                        copied.showSnackbar(copiedMessage)
+                    }
+                }
                 AboutSection(state)
             }
         }

@@ -2,6 +2,8 @@ package nz.personal.checkpointwatch.ui
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -20,6 +22,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -31,6 +34,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.launch
+import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.ui.home.HomeCallbacks
 import nz.personal.checkpointwatch.ui.home.HomeContent
 import nz.personal.checkpointwatch.ui.home.HomeViewModel
@@ -133,7 +138,9 @@ private fun SettingsRoute(onBack: () -> Unit) {
         onPauseOrDispose { }
     }
 
-    val callbacks = remember(viewModel, context, onBack) {
+    val scope = rememberCoroutineScope()
+
+    val callbacks = remember(viewModel, context, onBack, scope) {
         SettingsCallbacks(
             onBack = onBack,
             onInterval = viewModel::setInterval,
@@ -179,11 +186,30 @@ private fun SettingsRoute(onBack: () -> Unit) {
                         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
                 )
             },
+            onCopyDetails = { trigger ->
+                // Read off the main thread, then put it on the clipboard. The screen has already
+                // said "Copied": there is nothing useful to tell the owner if the file has gone
+                // missing between the state being built and the tap.
+                scope.launch { viewModel.details(trigger)?.let(context::copyToClipboard) }
+            },
         )
     }
 
     val shown = remember(state, blocked) { state.copy(notificationsBlocked = blocked) }
     SettingsContent(state = shown, callbacks = callbacks)
+}
+
+/**
+ * Puts the scan diagnostics on the clipboard, under a label the owner will recognise in whatever
+ * app they paste it into. Never worth crashing over: a clipboard service can be unavailable.
+ */
+private fun Context.copyToClipboard(text: String) {
+    try {
+        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+        clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.settings_details_label), text))
+    } catch (_: Exception) {
+        // ignore
+    }
 }
 
 /** Opens a link in whatever the owner uses for the web. False when the phone has nothing. */

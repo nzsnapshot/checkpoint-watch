@@ -7,9 +7,11 @@ import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import nz.personal.checkpointwatch.App
@@ -24,6 +26,7 @@ import nz.personal.checkpointwatch.data.ScrapeStatus
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.notify.Notifier
 import nz.personal.checkpointwatch.scan.BackgroundScheduler
+import nz.personal.checkpointwatch.scan.ScanDiagnosticsStore
 import nz.personal.checkpointwatch.settings.Settings
 import nz.personal.checkpointwatch.settings.SettingsStore
 import java.time.Instant
@@ -56,6 +59,10 @@ data class SettingsUiState(
      * a refused permission is not a preference, so it is never written to disk.
      */
     val notificationsBlocked: Boolean = false,
+    /** Whether there is a stored account of a foreground scan to copy. */
+    val hasForegroundDetails: Boolean = false,
+    /** The same for a background scan, which on a new phone may not have run yet. */
+    val hasBackgroundDetails: Boolean = false,
 ) {
     companion object {
         val Empty = SettingsUiState(
@@ -200,6 +207,7 @@ class SettingsViewModel(
     private val appContext: Context,
     private val settingsStore: SettingsStore,
     private val notifier: Notifier,
+    private val diagnostics: ScanDiagnosticsStore,
     scrapeDao: ScrapeDao,
     reportDao: ReportDao,
 ) : ViewModel() {
@@ -216,8 +224,17 @@ class SettingsViewModel(
             suburbs = suburbs,
             history = ScanHistoryUi.rows(scrapes),
             version = version,
+            // Re-read whenever anything else changes, which includes every recorded scan: the
+            // files appear the moment one finishes, and there is nothing to observe them with.
+            hasForegroundDetails = diagnostics.exists(ScanTrigger.FOREGROUND),
+            hasBackgroundDetails = diagnostics.exists(ScanTrigger.BACKGROUND),
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState.Empty)
+        // The two existence checks touch the disk; the screen's thread is not the place for that.
+    }.flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState.Empty)
+
+    /** The text behind "Copy last scan", or `null` when there is nothing stored for [trigger]. */
+    suspend fun details(trigger: ScanTrigger): String? = diagnostics.read(trigger)
 
     /**
      * Persists the interval and then re-applies the schedule. Both, always: a stored interval that
@@ -288,6 +305,7 @@ class SettingsViewModel(
                 appContext = application,
                 settingsStore = container.settings,
                 notifier = container.notifier,
+                diagnostics = container.scanDiagnostics,
                 scrapeDao = container.scrapeDao,
                 reportDao = container.reportDao,
             ) as T

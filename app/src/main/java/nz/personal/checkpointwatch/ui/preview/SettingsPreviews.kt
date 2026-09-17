@@ -16,6 +16,7 @@ internal val NoSettingsCallbacks = SettingsCallbacks(
     onClearWatchedSuburbs = {},
     onBatterySettings = {},
     onNotificationSettings = {},
+    onCopyDetails = {},
 )
 
 @Composable
