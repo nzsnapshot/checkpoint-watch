@@ -96,6 +96,13 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    // Google signs a block into every APK listing its dependencies, encrypted to a Play key.
+    // This app is never going near Play, so the block is nothing but an opaque passenger.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
 }
 
 dependencies {
@@ -137,11 +144,47 @@ dependencies {
     debugImplementation(libs.compose.ui.test.manifest)
 }
 
+/**
+ * The gate between "a release build" and "a release".
+ *
+ * `assembleRelease` is allowed to fall back to the debug key, because it is also how the release
+ * build is smoke-tested locally. Packaging is not: an APK signed with the debug key and named
+ * `checkpoint-watch-1.2.0.apk` in `dist/` is indistinguishable from the real thing at the moment
+ * someone reaches for it, and Android will refuse to install it over the app on the phone —
+ * signature changes are exactly what Obtainium and the platform are checking for.
+ */
+val requireReleaseKeystore = tasks.register("requireReleaseKeystore") {
+    group = "verification"
+    description = "Fails unless keystore.properties exists, so a debug-signed APK can never be packaged as a release."
+    doFirst {
+        check(hasKeystoreProperties) {
+            "Refusing to package a release APK: keystore.properties was not found at the " +
+                "repository root, so this build would be signed with the DEBUG key. An APK " +
+                "signed with a different key cannot update the app already on the phone — " +
+                "Obtainium and Android both refuse it — and once it is sitting in dist/ under a " +
+                "release name there is nothing to tell it apart from a real one.\n" +
+                "  * To cut a real release: create keystore.properties (see README, " +
+                "\"Making a release\").\n" +
+                "  * To smoke-test the release build locally: ./gradlew assembleRelease, which " +
+                "falls back to the debug key on purpose and leaves its APK in the build " +
+                "directory."
+        }
+    }
+}
+
 // Copies the signed release APK out of the variant-named build output into a stable, versioned
-// name at the repo root, ready for `gh release create` (see README "Making a release").
+// name under dist/, ready for `gh release create` (see README "Making a release").
 tasks.register<Copy>("packageReleaseApk") {
-    dependsOn("assembleRelease")
+    dependsOn(requireReleaseKeystore, "assembleRelease")
     from(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
     into(rootProject.layout.projectDirectory.dir("dist"))
     rename { "checkpoint-watch-$releaseVersionName.apk" }
+}
+
+// So the refusal above arrives in seconds rather than after a full release build. Only ever in
+// force when both tasks are in the graph, which is only ever `packageReleaseApk`.
+// (Matched by name rather than named(): the Android plugin creates its variant tasks later than
+// this file is evaluated.)
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    mustRunAfter(requireReleaseKeystore)
 }

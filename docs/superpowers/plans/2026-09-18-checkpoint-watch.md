@@ -62,7 +62,9 @@ app/src/test/resources/fixtures/graphql_1.txt, graphql_2.txt, graphql_3.txt, ini
 - [ ] Step 1: Bootstrap the wrapper from the cached distribution: `~/.gradle/wrapper/dists/gradle-9.3.1-bin/*/gradle-9.3.1/bin/gradle wrapper --gradle-version 9.3.1` in an empty settings project.
 - [ ] Step 2: Write `gradle/libs.versions.toml` with the versions in Global Constraints; plugins: `com.android.application` (AGP 9.3.2, built-in Kotlin — do **not** apply `org.jetbrains.kotlin.android`), `org.jetbrains.kotlin.plugin.compose`, `org.jetbrains.kotlin.plugin.serialization`, `com.google.devtools.ksp`.
 - [ ] Step 3: `app/build.gradle.kts`: namespace/appId, SDK levels, `buildFeatures { compose = true }`, `testOptions.unitTests.isReturnDefaultValues = true`, release build type `isMinifyEnabled = true` with default proguard + debug signing (personal sideload), dependencies per File map, `ksp(room-compiler)`, room schema dir `app/schemas`.
-- [ ] Step 4: `local.properties` with `sdk.dir=~/Library/Android/sdk`.
+- [ ] Step 4: `local.properties` with `sdk.dir=` pointing at the Android SDK on
+      the build machine (on macOS, `~/Library/Android/sdk`). The file is
+      git-ignored: it is per-machine, not part of the project.
 - [ ] Step 5: Manifest: permissions, `App`, single exported `MainActivity` (`launchMode=singleTop`, `windowSoftInputMode=adjustResize`), `android:enableOnBackInvokedCallback="true"`, `android:allowBackup="false"`, `android:usesCleartextTraffic="false"`.
 - [ ] Step 6: Adaptive icon: `ic_launcher_background` (#0B1220), foreground vector = amber (#FFB020) beacon (filled circle r=10 at centre with two concentric arcs) inside the 66 dp safe zone, plus `monochrome` layer.
 - [ ] Step 7: Run `./gradlew assembleDebug testDebugUnitTest`. Expected: BUILD SUCCESSFUL. Resolve version incompatibilities here per Global Constraints.

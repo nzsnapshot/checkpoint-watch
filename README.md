@@ -57,12 +57,48 @@ A few things follow from that:
 
 ## Privacy
 
-- The app talks to exactly one address: `www.facebook.com`. It has no
-  analytics, no crash reporting, no third-party network calls of any kind.
+- **Facebook's servers, and nothing else.** The app loads
+  `https://www.facebook.com/CheckpointNZ` and nothing else. Loading that page
+  means the page itself also fetches from Facebook's own content hosts
+  (`*.fbcdn.net` and similar) — the same requests any browser opening that
+  page would make, to Facebook, not to anyone else. There is no analytics, no
+  crash reporting, and no other service of any kind: no request ever goes to a
+  server that isn't Facebook's.
+- **The WebView is told not to phone home.** Android's WebView normally puts
+  the app's package name in an `X-Requested-With` header on every request, and
+  can send the URLs it loads to Google for a Safe Browsing check. Both are
+  switched off in the manifest and in the collector's settings, along with the
+  WebView's own metrics reporting. (On GrapheneOS, Vanadium doesn't do the
+  Safe Browsing lookups anyway — this makes the behaviour the same whichever
+  WebView the phone is using.)
 - There is no account, no sign-in, and no data sent about you to anyone.
-- Everything the app collects stays in a local database on your phone. There
-  is no export, no backup, and no cloud sync — deleting the app deletes the
-  data.
+- Everything the app collects stays in a local database on your phone. It is
+  excluded from Android's cloud backup and from device-to-device transfer, so
+  it never leaves the phone by that route either. There is no export and no
+  cloud sync — deleting the app deletes the data. Scan records older than 30
+  days and posts nothing has seen for 180 days are cleared automatically.
+
+### Permissions, and where they come from
+
+The app asks for `INTERNET`, and for `POST_NOTIFICATIONS` only at the moment
+you turn notifications on. The rest are merged into the manifest by
+WorkManager, which is what runs the optional background checks:
+
+| Permission | Why |
+|---|---|
+| `ACCESS_NETWORK_STATE` | WorkManager waits for a connection before running a check |
+| `WAKE_LOCK` | keeps the phone awake for the few seconds a background check takes |
+| `RECEIVE_BOOT_COMPLETED` | re-schedules the background checks after a restart |
+| `FOREGROUND_SERVICE` | WorkManager declares it; this app never starts one |
+
+WorkManager also declares one permission of its own,
+`nz.personal.checkpointwatch.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, at
+protection level `signature`: it exists so that only code signed with this
+app's own key can reach WorkManager's internal broadcast receiver. Nothing
+outside the app can hold it, and it grants nothing beyond that receiver.
+
+(To see the list for yourself on any build:
+`aapt2 dump permissions app/build/outputs/apk/release/app-release.apk`.)
 
 ## Installing on GrapheneOS with Obtainium
 
@@ -195,9 +231,19 @@ keyPassword=...
 ```
 
 With that file in place, `assembleRelease` signs with the real key instead
-of falling back to the debug key (Gradle prints a warning if the file is
-missing, so a fallback-signed build is never accidentally mistaken for a
-real one).
+of falling back to the debug key.
+
+Without it, the two tasks behave differently on purpose:
+
+- `assembleRelease` still works, falling back to the debug key and printing a
+  warning. That is so the release build — minified, shrunk, the one that can
+  actually break — can be smoke-tested locally without the signing key being
+  anywhere near the machine. Its APK stays in the build directory.
+- `:app:packageReleaseApk` refuses to run at all, and says why. A debug-signed
+  APK sitting in `dist/` under a release name is worse than no APK: nothing
+  distinguishes it from a real one, and Android and Obtainium will both refuse
+  to install it over the copy already on the phone, because the signature has
+  changed.
 
 To cut a release:
 

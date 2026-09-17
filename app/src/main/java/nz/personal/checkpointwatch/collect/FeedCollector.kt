@@ -25,7 +25,9 @@ import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.webkit.UserAgentMetadata
 import androidx.webkit.WebMessageCompat
+import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
@@ -57,6 +59,34 @@ private const val PAGE_LOAD_TIMEOUT_MS = 20_000L
 
 /** Hard ceiling on a whole scan; whatever was captured by then is kept. */
 private const val SCAN_TIMEOUT_MS = 45_000L
+
+/** Chrome's major version, as it appears in [Constants.DESKTOP_UA]. */
+private const val UA_CHROME_MAJOR = "126"
+private const val UA_CHROME_FULL = "126.0.0.0"
+
+/**
+ * The client hints that go with [Constants.DESKTOP_UA]: desktop Chrome 126 on 64-bit Windows.
+ * Sent only where the WebView supports setting them; see `hideOurselvesFromFacebook`.
+ */
+private val DESKTOP_UA_METADATA: UserAgentMetadata by lazy {
+    fun brand(name: String) = UserAgentMetadata.BrandVersion.Builder()
+        .setBrand(name)
+        .setMajorVersion(UA_CHROME_MAJOR)
+        .setFullVersion(UA_CHROME_FULL)
+        .build()
+
+    UserAgentMetadata.Builder()
+        .setBrandVersionList(listOf(brand("Chromium"), brand("Google Chrome")))
+        .setPlatform("Windows")
+        .setPlatformVersion("10.0.0")
+        .setFullVersion(UA_CHROME_FULL)
+        .setArchitecture("x86")
+        .setBitness(64)
+        .setModel("")
+        .setMobile(false)
+        .setWow64(false)
+        .build()
+}
 
 /**
  * Ceiling on buffered JSON: 4 M UTF-16 characters, which is about 8 MB of heap. Chunks that would
@@ -348,6 +378,7 @@ class FeedCollector(private val appContext: Context) {
             cacheMode = WebSettings.LOAD_NO_CACHE
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
+        hideOurselvesFromFacebook(webView.settings)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
 
         // Invisible to the user and to accessibility, and it must never take input. Both hosts
@@ -364,6 +395,39 @@ class FeedCollector(private val appContext: Context) {
 
         if ((appContext.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             WebView.setWebContentsDebuggingEnabled(true)
+        }
+    }
+
+    /**
+     * Stops the WebView telling Facebook things about this phone that the page has no business
+     * knowing, and that no ordinary desktop browser would send.
+     *
+     * 1. `X-Requested-With`. Android WebView puts the *host app's package name* in that header on
+     *    every request, so every scan would announce `nz.personal.checkpointwatch` to Facebook —
+     *    a stable identifier for a private app, attached to an otherwise anonymous logged-out
+     *    visit. An empty allow list turns it off for every origin.
+     * 2. User-Agent client hints. The user agent string says desktop Chrome on Windows
+     *    ([Constants.DESKTOP_UA]), but the client hints the engine sends alongside it are derived
+     *    from the real device — Android, mobile, a phone model. That contradiction is more
+     *    distinctive than either half on its own, so the hints are set to match the string.
+     *
+     * Everything is behind a feature check and a `runCatching`: both APIs depend on the WebView
+     * provider on the phone, and neither is worth failing a scan over.
+     *
+     * The allow-list API is deprecated and `@RestrictTo` in androidx.webkit 1.17, because newer
+     * WebView versions have stopped sending the header at all — which is the outcome we want. It
+     * is called anyway, with both warnings suppressed, because `minSdk` is 29 and the phone may
+     * be carrying an older WebView that still sends it. If the method is withdrawn from a future
+     * androidx.webkit, the `runCatching` below catches the resulting error and the app carries on.
+     */
+    @Suppress("DEPRECATION")
+    @SuppressLint("RestrictedApi")
+    private fun hideOurselvesFromFacebook(settings: WebSettings) {
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+            runCatching { WebSettingsCompat.setRequestedWithHeaderOriginAllowList(settings, emptySet()) }
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) {
+            runCatching { WebSettingsCompat.setUserAgentMetadata(settings, DESKTOP_UA_METADATA) }
         }
     }
 

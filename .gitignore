@@ -14,3 +14,7 @@ keystore.properties
 
 # Signed release APKs produced by :app:packageReleaseApk.
 dist/
+
+# Working notes from the spec-driven development runs: briefs, reports and review diffs. The
+# design spec and the plan live in docs/ and are tracked; this is the scaffolding around them.
+.superpowers/

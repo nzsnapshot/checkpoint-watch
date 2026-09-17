@@ -30,6 +30,15 @@ import nz.personal.checkpointwatch.ui.theme.CheckpointWatchTheme
  * It also owns the one [ActivityHost] the collector attaches its WebView to. That WebView is added
  * as child 0 of the content frame, underneath the opaque Compose surface added after it, so
  * Facebook is laid out — which is what makes its lazy loading run — and never seen.
+ *
+ * The manifest declares `configChanges` for everything Compose handles itself (rotation, size,
+ * density, font scale, locale, light/dark). Without it, turning the phone over mid-scan destroys
+ * the Activity, taking the WebView and the scan with it — and the two-minute throttle then
+ * refuses to start the replacement, so a rotation could cost the owner a scan. Compose reads all
+ * of these through `LocalConfiguration`, which is updated on `onConfigurationChanged`, so the
+ * theme still follows the system's dark mode. (`themes.xml`'s `windowBackground` no longer
+ * switches with `uiMode`, since that is resolved once at Activity creation — harmless: it is only
+ * ever seen for the frame before Compose draws, and the opaque Surface covers it after that.)
  */
 class MainActivity : ComponentActivity() {
 
