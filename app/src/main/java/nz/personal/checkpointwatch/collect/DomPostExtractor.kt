@@ -92,7 +92,10 @@ object DomPostExtractor {
      * as any other, which matters most of all for those: with no header to anchor on, the age line
      * is otherwise the thing that changes the post's identity every single scan.
      *
-     * If the cuts would leave nothing at all, the original text is returned unchanged.
+     * An article that is nothing but chrome cleans to `""`, and [extract] drops it: that is a post
+     * with no text of its own — a caption-less photo — and the spec drops those. Returning the
+     * chrome instead would keep the age line with it, so the same photo would hash differently,
+     * and so be a different post with a notification of its own, on every scan.
      */
     fun cleanText(text: String): String {
         val lines = text.lines().map { it.trimEnd() }
@@ -100,8 +103,7 @@ object DomPostExtractor {
         while (start < lines.size && isHeaderChrome(lines[start])) start++
         var end = lines.size
         while (end > start && isFooterChrome(lines[end - 1])) end--
-        val kept = lines.subList(start, end).joinToString("\n").trim()
-        return kept.ifEmpty { text.trim() }
+        return lines.subList(start, end).joinToString("\n").trim()
     }
 
     /** Only an entire line that is exactly one of these: "Active checkpoint on…" is a post. */

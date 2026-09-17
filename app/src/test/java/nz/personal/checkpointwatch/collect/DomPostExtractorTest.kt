@@ -265,9 +265,43 @@ class DomPostExtractorTest {
         assertEquals("Follow the diversion signs", DomPostExtractor.cleanText("Follow\nFollow the diversion signs"))
     }
 
+    // An article that is nothing but chrome is a post with no text — a caption-less photo, say.
+    // The spec drops those. Keeping the chrome instead would keep the age line with it, so the
+    // same photo would get a new hash, a new dom: id, a new row and a new-report notification on
+    // every single scan.
+
     @Test
-    fun cleanText_neverReturnsNothing() {
-        assertEquals("Like\nComment\nShare", DomPostExtractor.cleanText("Like\nComment\nShare"))
+    fun cleanText_isEmptyWhenTheArticleIsNothingButChrome() {
+        val allChrome = "Online status indicator\nActive\nCheckpoint Watch Auckland\n22m\n·\n" +
+            "All reactions:\n8\nLike\nComment\nShare"
+
+        assertEquals("", DomPostExtractor.cleanText(allChrome))
+    }
+
+    @Test
+    fun extract_dropsAnArticleThatIsNothingButChrome() {
+        val posts = DomPostExtractor.extract(
+            listOf(
+                DomPost(
+                    "Online status indicator\nActive\nCheckpoint Watch Auckland\n22m\n·\n" +
+                        "All reactions:\n8\nLike\nComment\nShare",
+                    "22m",
+                    null,
+                ),
+                DomPost("Like\nComment\nShare", "5m", null),
+                DomPost("🛑 CHECKPOINT – Trig Road\nBoth directions\nLike\nShare", "5m", null),
+            ),
+            scanTime,
+        )
+
+        assertEquals(1, posts.size)
+        assertEquals("🛑 CHECKPOINT – Trig Road\nBoth directions", posts.single().text)
+    }
+
+    @Test
+    fun cleanText_keepsAPostThatIsOnlyOneRealWord() {
+        assertEquals("Clear", DomPostExtractor.cleanText("Checkpoint Watch Auckland\n22m\nClear\nLike\nShare"))
+        assertEquals("Clear", DomPostExtractor.extract(listOf(DomPost("Clear", "5m", null)), scanTime).single().text)
     }
 
     // --- links --------------------------------------------------------------------------------
