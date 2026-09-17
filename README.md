@@ -285,6 +285,25 @@ Fixtures captured from the real page live under `app/src/test/resources/`
 them with freshly captured data is usually the fastest way to confirm a fix
 after Facebook changes something.
 
+## If a scan finds too few posts
+
+A healthy scan collects about ten posts and ends at Facebook's sign-in wall.
+If the scan history shows one or two posts instead, or keeps saying *Reached
+the end of the posts* straight away, the app can tell you what it saw:
+
+**Settings → Scan history → Scan details → Copy last scan**
+
+That puts a short technical report on the clipboard — which WebView ran the
+page, how big it was, what the page's dialogs measured, how far it scrolled,
+how many responses it captured and why it stopped. Paste it into a message
+and send it. *Copy last background scan* does the same for the most recent
+background check, which is the one that runs with no screen at all and can
+behave differently.
+
+The report contains no personal information: no account, no cookies, no
+tokens, no post text, and no web addresses beyond the page the app already
+reads.
+
 ## Known limits
 
 - Sees at most ~10 posts per scan; longer gaps between scans mean missed
