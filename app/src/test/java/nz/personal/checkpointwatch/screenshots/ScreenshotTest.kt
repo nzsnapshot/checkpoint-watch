@@ -134,6 +134,14 @@ class ScreenshotTest {
         capture("home_dark_expanded.png")
     }
 
+    /** The same card in light, where its edge comes from a hairline rather than from being lighter. */
+    @Test
+    fun home_light_expanded() {
+        setHome(SampleData.multiReport, dark = false)
+        composeTestRule.onAllNodesWithText("Pakuranga Road", substring = true)[0].performClick()
+        capture("home_light_expanded.png")
+    }
+
     /** The other half of that decision: a single-report post, where the card already said it all. */
     @Test
     fun home_dark_expanded_plain() {

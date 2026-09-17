@@ -9,8 +9,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -31,6 +36,7 @@ import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
@@ -61,10 +67,12 @@ private val MAX_CONTENT_WIDTH = 640.dp
 
 private val GUTTER = 16.dp
 
-/** Vertical rhythm, on a 4 dp grid: between cards, between sections, above a day heading. */
+/**
+ * Vertical rhythm, on a 4 dp grid. A day heading adds 16 of its own on top of [CARD_GAP], which is
+ * the 24 a new day gets; see `DayHeader`.
+ */
 private val CARD_GAP = 8.dp
 private val SECTION_GAP = 16.dp
-internal val DAY_HEADER_GAP = 24.dp
 
 /** Room the subtitle needs in the expanded bar, and how fast it gets out of the way. */
 private val SUBTITLE_HEADROOM = 24.dp
@@ -118,7 +126,11 @@ fun HomeContent(
             // The filters live up here with the app bar rather than in the list. A LazyColumn pins
             // only its most recent sticky header, so as a list item the filter row was unpinned by
             // the first day heading and scrolled away; the day headings stay sticky in the list.
-            val scrolled = scrollBehavior.state.overlappedFraction > 0.01f
+            // Read through derivedStateOf: overlappedFraction changes every scroll frame, and
+            // reading it directly here would recompose the whole bar — chips included — with it.
+            val scrolled by remember(scrollBehavior) {
+                derivedStateOf { scrollBehavior.state.overlappedFraction > 0.01f }
+            }
             val barColour by animateColorAsState(
                 targetValue = if (scrolled) scheme.surfaceContainer else scheme.background,
                 label = "top-bar-colour",
@@ -142,13 +154,22 @@ fun HomeContent(
                     },
                     scrollBehavior = scrollBehavior,
                 )
-                FilterBar(
-                    hiddenTypes = state.settings.hiddenTypes,
-                    suburbs = state.suburbs,
-                    suburbFilter = state.settings.suburbFilter,
-                    onToggleType = callbacks.onToggleType,
-                    onSetSuburb = callbacks.onSetSuburb,
-                )
+                // Inset and capped exactly like the list below it, so on a tablet or in landscape
+                // the chips line up with the cards instead of running the full width — and never
+                // sit under a cutout or a side navigation bar.
+                PageWidth(
+                    Modifier.windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+                    ),
+                ) {
+                    FilterBar(
+                        hiddenTypes = state.settings.hiddenTypes,
+                        suburbs = state.suburbs,
+                        suburbFilter = state.settings.suburbFilter,
+                        onToggleType = callbacks.onToggleType,
+                        onSetSuburb = callbacks.onSetSuburb,
+                    )
+                }
                 // A hairline, and only once something is actually underneath it.
                 HorizontalDivider(
                     color = if (scrolled) scheme.outlineVariant else Color.Transparent,

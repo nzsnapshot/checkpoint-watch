@@ -37,12 +37,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.model.ReportType
+import nz.personal.checkpointwatch.ui.ActionChip
 import nz.personal.checkpointwatch.ui.CwIcons
-import nz.personal.checkpointwatch.ui.ToneChip
 import nz.personal.checkpointwatch.ui.TypeChip
-
-/** The home screen's own gutter, repeated here because the bar spans the full width when pinned. */
-private val GUTTER = 16.dp
 
 /**
  * The row of filters, pinned under the top bar: one chip per type and one for the area.
@@ -66,7 +63,7 @@ fun FilterBar(
         modifier = modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = GUTTER, vertical = 4.dp),
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -77,12 +74,15 @@ fun FilterBar(
                 onClick = { onToggleType(type) },
             )
         }
-        ToneChip(
+        ActionChip(
             label = suburbFilter ?: allAreas,
+            description = stringResource(R.string.filter_area_label),
+            state = suburbFilter ?: allAreas,
+            actionLabel = stringResource(R.string.filter_area_action),
             icon = CwIcons.Place,
             // The owner's own choice rather than a category, so it carries the app's accent.
             tone = MaterialTheme.colorScheme.primary,
-            selected = suburbFilter != null,
+            active = suburbFilter != null,
             onClick = { sheetOpen = true },
         )
     }
