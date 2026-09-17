@@ -1,5 +1,6 @@
 package nz.personal.checkpointwatch.ui.preview
 
+import nz.personal.checkpointwatch.collect.EndReason
 import nz.personal.checkpointwatch.data.CollectorKind
 import nz.personal.checkpointwatch.data.ScanTrigger
 import nz.personal.checkpointwatch.data.ScrapeStatus
@@ -340,11 +341,11 @@ object SampleData {
     )
 
     val history: List<ScanHistoryRow> = listOf(
-        ScanHistoryRow(1, minutesAgo(3), ScanTrigger.FOREGROUND, CollectorKind.WEBVIEW, ScrapeStatus.OK, 3, 10),
-        ScanHistoryRow(2, minutesAgo(33), ScanTrigger.BACKGROUND, CollectorKind.WEBVIEW, ScrapeStatus.OK, 1, 10),
-        ScanHistoryRow(3, minutesAgo(63), ScanTrigger.BACKGROUND, CollectorKind.HTTP, ScrapeStatus.OK_WITH_GAP, 1, 1),
-        ScanHistoryRow(4, minutesAgo(93), ScanTrigger.BACKGROUND, CollectorKind.NONE, ScrapeStatus.FAILED_NETWORK, 0, 0),
-        ScanHistoryRow(5, minutesAgo(140), ScanTrigger.FOREGROUND, CollectorKind.WEBVIEW_DOM, ScrapeStatus.CANCELLED, 0, 4),
+        ScanHistoryRow(1, minutesAgo(3), ScanTrigger.FOREGROUND, CollectorKind.WEBVIEW, ScrapeStatus.OK, 3, 10, EndReason.LOGIN_WALL),
+        ScanHistoryRow(2, minutesAgo(33), ScanTrigger.BACKGROUND, CollectorKind.WEBVIEW, ScrapeStatus.OK, 1, 10, EndReason.NO_MORE_POSTS),
+        ScanHistoryRow(3, minutesAgo(63), ScanTrigger.BACKGROUND, CollectorKind.HTTP, ScrapeStatus.OK_WITH_GAP, 1, 1, EndReason.TIMEOUT),
+        ScanHistoryRow(4, minutesAgo(93), ScanTrigger.BACKGROUND, CollectorKind.NONE, ScrapeStatus.FAILED_NETWORK, 0, 0, EndReason.NETWORK_ERROR),
+        ScanHistoryRow(5, minutesAgo(140), ScanTrigger.FOREGROUND, CollectorKind.WEBVIEW_DOM, ScrapeStatus.CANCELLED, 0, 4, EndReason.CANCELLED),
     )
 
     val settings: SettingsUiState = SettingsUiState(

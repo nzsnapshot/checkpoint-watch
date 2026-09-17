@@ -123,6 +123,15 @@
     <string name="status_failed_network">Couldn\'t connect</string>
     <string name="status_failed_no_data">No posts returned</string>
     <string name="status_cancelled">Stopped early</string>
+    <!-- Why the collector stopped. The sign-in wall is the normal, healthy end of a full scan:
+         Facebook stops serving posts to a logged-out visitor after about ten, so the row says so
+         rather than reading as a failure. -->
+    <string name="end_login_wall">Reached Facebook\'s sign-in wall (normal)</string>
+    <string name="end_no_more_posts">Reached the end of the posts</string>
+    <string name="end_timeout">Ran out of time</string>
+    <string name="end_network_error">Network problem</string>
+    <string name="end_blocked">Facebook redirected to sign-in</string>
+    <string name="end_cancelled">Stopped when the app closed</string>
     <string name="collector_webview">Full page</string>
     <string name="collector_webview_dom">Page text</string>
     <string name="collector_http">Newest post only</string>

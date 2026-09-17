@@ -1,6 +1,7 @@
 package nz.personal.checkpointwatch.ui
 
 import nz.personal.checkpointwatch.R
+import nz.personal.checkpointwatch.collect.EndReason
 import nz.personal.checkpointwatch.data.CollectorKind
 import nz.personal.checkpointwatch.data.ScanTrigger
 import nz.personal.checkpointwatch.data.ScrapeEntity
@@ -9,6 +10,7 @@ import nz.personal.checkpointwatch.scan.ALLOWED_BACKGROUND_MINUTES
 import nz.personal.checkpointwatch.ui.settings.IntervalUi
 import nz.personal.checkpointwatch.ui.settings.ScanHistoryUi
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.time.Instant
 
@@ -26,12 +28,13 @@ class ScanHistoryUiTest {
         startedAt: Long = 1_600_000_000_000,
         postsSeen: Int = 10,
         postsNew: Int = 3,
+        endReason: String = "NO_MORE_POSTS",
     ) = ScrapeEntity(
         id = id,
         startedAt = startedAt,
         finishedAt = startedAt + 20_000,
         status = status,
-        endReason = "NO_MORE_POSTS",
+        endReason = endReason,
         trigger = trigger,
         collector = collector,
         postsSeen = postsSeen,
@@ -91,6 +94,49 @@ class ScanHistoryUiTest {
                 R.string.status_failed_network,
                 R.string.status_failed_no_data,
                 R.string.status_cancelled,
+            ),
+            labels,
+        )
+        assertEquals(labels.size, labels.toSet().size)
+    }
+
+    // --- why the scan stopped ------------------------------------------------------------------
+    //
+    // The database has recorded an end reason all along and the screen never showed it, so the
+    // most useful line in the log ("reached Facebook's sign-in wall" — the normal, healthy end of
+    // a scan) was invisible.
+
+    @Test
+    fun `a row carries the stored end reason`() {
+        val rows = ScanHistoryUi.rows(listOf(entity(endReason = "LOGIN_WALL")))
+
+        assertEquals(EndReason.LOGIN_WALL, rows.single().endReason)
+    }
+
+    @Test
+    fun `every stored end reason reads back as itself`() {
+        EndReason.entries.forEach { assertEquals(it, ScanHistoryUi.endReason(it.name)) }
+    }
+
+    @Test
+    fun `an end reason from a later version is left blank rather than guessed at`() {
+        assertNull(ScanHistoryUi.endReason("SOMETHING_NEW"))
+        assertNull(ScanHistoryUi.endReason(""))
+        assertNull(ScanHistoryUi.rows(listOf(entity(endReason = "SOMETHING_NEW"))).single().endReason)
+    }
+
+    @Test
+    fun `each end reason has its own plain-English label`() {
+        val labels = EndReason.entries.map(ScanHistoryUi::endReasonLabel)
+
+        assertEquals(
+            listOf(
+                R.string.end_login_wall,
+                R.string.end_no_more_posts,
+                R.string.end_timeout,
+                R.string.end_network_error,
+                R.string.end_blocked,
+                R.string.end_cancelled,
             ),
             labels,
         )

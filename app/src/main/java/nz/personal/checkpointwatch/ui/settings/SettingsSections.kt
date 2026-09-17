@@ -82,6 +82,15 @@ internal fun ScanHistoryItem(row: ScanHistoryRow) {
             style = MaterialTheme.typography.bodySmall,
             color = scheme.onSurfaceVariant,
         )
+        // Why the collector stopped, on its own line: the counts line is already two facts long,
+        // and this sentence is the one that explains the other two.
+        row.endReason?.let { reason ->
+            Text(
+                text = stringResource(ScanHistoryUi.endReasonLabel(reason)),
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

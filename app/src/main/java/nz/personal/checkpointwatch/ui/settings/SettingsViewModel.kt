@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import nz.personal.checkpointwatch.App
 import nz.personal.checkpointwatch.R
+import nz.personal.checkpointwatch.collect.EndReason
 import nz.personal.checkpointwatch.data.CollectorKind
 import nz.personal.checkpointwatch.data.ReportDao
 import nz.personal.checkpointwatch.data.ScanTrigger
@@ -40,6 +41,8 @@ data class ScanHistoryRow(
     val status: ScrapeStatus,
     val new: Int,
     val seen: Int,
+    /** Why the collector stopped; `null` when the stored name is one this version cannot read. */
+    val endReason: EndReason? = null,
 )
 
 /** Everything the settings screen renders. */
@@ -82,6 +85,7 @@ object ScanHistoryUi {
             status = status(entity.status),
             new = entity.postsNew,
             seen = entity.postsSeen,
+            endReason = endReason(entity.endReason),
         )
     }
 
@@ -94,6 +98,13 @@ object ScanHistoryUi {
 
     fun collector(name: String): CollectorKind =
         CollectorKind.entries.firstOrNull { it.name == name } ?: CollectorKind.NONE
+
+    /**
+     * Unlike the others this one has no safe default: every end reason says something specific
+     * and confident about what happened, so a name this version cannot read is better shown as
+     * nothing at all than as the nearest familiar sentence.
+     */
+    fun endReason(name: String): EndReason? = EndReason.entries.firstOrNull { it.name == name }
 
     @StringRes
     fun statusLabel(status: ScrapeStatus): Int = when (status) {
@@ -108,6 +119,16 @@ object ScanHistoryUi {
     fun triggerLabel(trigger: ScanTrigger): Int = when (trigger) {
         ScanTrigger.FOREGROUND -> R.string.trigger_foreground
         ScanTrigger.BACKGROUND -> R.string.trigger_background
+    }
+
+    @StringRes
+    fun endReasonLabel(reason: EndReason): Int = when (reason) {
+        EndReason.LOGIN_WALL -> R.string.end_login_wall
+        EndReason.NO_MORE_POSTS -> R.string.end_no_more_posts
+        EndReason.TIMEOUT -> R.string.end_timeout
+        EndReason.NETWORK_ERROR -> R.string.end_network_error
+        EndReason.BLOCKED -> R.string.end_blocked
+        EndReason.CANCELLED -> R.string.end_cancelled
     }
 
     @StringRes
