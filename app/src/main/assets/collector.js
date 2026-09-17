@@ -15,9 +15,13 @@
  * Plain ES2017, no page globals other than the two install guards, everything in try/catch: a
  * throw here would be a scan that silently collects nothing.
  *
- * The pure decision helpers (isAgeText, isShown, dialogDecision, shouldEndOnWall, shouldStopOnStall,
- * pickPostText, compactText, diagBody) are exported when this file is loaded by node, so they can
- * be tested without a browser: see app/src/test/js/collector.test.js.
+ * It shares its origin registration with `plugin_collector.js`, which owns Facebook's Page Plugin
+ * under /plugins/. Both scripts arrive on both pages; each gates itself on `location.pathname` at
+ * the very top, and each has its own install guard, so neither can ever run twice in one page.
+ *
+ * The pure decision helpers (isPluginPath, isAgeText, isShown, dialogDecision, shouldEndOnWall,
+ * shouldStopOnStall, pickPostText, compactText, diagBody) are exported when this file is loaded by
+ * node, so they can be tested without a browser: see app/src/test/js/collector.test.js.
  *
  * It also keeps a small, bounded diagnostic log of every round and ships it as one `diag` message,
  * because the WebView this runs in cannot be inspected from the outside: when a scan on the
@@ -28,8 +32,26 @@
 
   var IN_BROWSER = typeof window !== 'undefined' && typeof document !== 'undefined';
 
+  /**
+   * Pure: is this Facebook's Page Plugin, which `plugin_collector.js` owns and this script must
+   * leave alone? Both scripts are registered for the same origin, so both arrive on both pages;
+   * this is the line between them, and the two files agree on it (see the node tests).
+   */
+  function isPluginPath(pathname) {
+    try {
+      return typeof pathname === 'string' && pathname.indexOf('/plugins/') === 0;
+    } catch (e) {
+      return false;
+    }
+  }
+
   if (IN_BROWSER) {
     try {
+      // The gate, before anything else — before the install guard, before the XHR wrappers, and
+      // before the viewport observer. On the widget this script is a no-op.
+      if (isPluginPath(location.pathname)) {
+        return;
+      }
       if (window.__cwInstalled) {
         return;
       }
@@ -1475,6 +1497,7 @@
   try {
     if (!IN_BROWSER && typeof module !== 'undefined' && module.exports) {
       module.exports = {
+        isPluginPath: isPluginPath,
         isAgeText: isAgeText,
         isShown: isShown,
         desiredViewport: desiredViewport,
