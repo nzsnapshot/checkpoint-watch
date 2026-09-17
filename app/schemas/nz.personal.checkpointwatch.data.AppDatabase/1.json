@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "8cd7bf129d8304a85d4b2f2a369da38d",
+    "identityHash": "97c16808cd6799e530cc03321a70142c",
     "entities": [
       {
         "tableName": "posts",
@@ -83,6 +83,15 @@
             ],
             "orders": [],
             "createSql": "CREATE INDEX IF NOT EXISTS `index_posts_createdAt` ON `${TABLE_NAME}` (`createdAt`)"
+          },
+          {
+            "name": "index_posts_textHash",
+            "unique": false,
+            "columnNames": [
+              "textHash"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_posts_textHash` ON `${TABLE_NAME}` (`textHash`)"
           }
         ]
       },
@@ -203,7 +212,7 @@
       },
       {
         "tableName": "post_revisions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `postId` TEXT NOT NULL, `text` TEXT NOT NULL, `replacedAt` INTEGER NOT NULL)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `postId` TEXT NOT NULL, `text` TEXT NOT NULL, `replacedAt` INTEGER NOT NULL, FOREIGN KEY(`postId`) REFERENCES `posts`(`postId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "id",
@@ -235,7 +244,31 @@
           "columnNames": [
             "id"
           ]
-        }
+        },
+        "indices": [
+          {
+            "name": "index_post_revisions_postId",
+            "unique": false,
+            "columnNames": [
+              "postId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_post_revisions_postId` ON `${TABLE_NAME}` (`postId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "posts",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "postId"
+            ],
+            "referencedColumns": [
+              "postId"
+            ]
+          }
+        ]
       },
       {
         "tableName": "scrapes",
@@ -311,7 +344,7 @@
       },
       {
         "tableName": "scrape_sightings",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`scrapeId` INTEGER NOT NULL, `postId` TEXT NOT NULL, PRIMARY KEY(`scrapeId`, `postId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`scrapeId` INTEGER NOT NULL, `postId` TEXT NOT NULL, PRIMARY KEY(`scrapeId`, `postId`), FOREIGN KEY(`scrapeId`) REFERENCES `scrapes`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`postId`) REFERENCES `posts`(`postId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "scrapeId",
@@ -332,12 +365,56 @@
             "scrapeId",
             "postId"
           ]
-        }
+        },
+        "indices": [
+          {
+            "name": "index_scrape_sightings_scrapeId",
+            "unique": false,
+            "columnNames": [
+              "scrapeId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_scrape_sightings_scrapeId` ON `${TABLE_NAME}` (`scrapeId`)"
+          },
+          {
+            "name": "index_scrape_sightings_postId",
+            "unique": false,
+            "columnNames": [
+              "postId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_scrape_sightings_postId` ON `${TABLE_NAME}` (`postId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "scrapes",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "scrapeId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "posts",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "postId"
+            ],
+            "referencedColumns": [
+              "postId"
+            ]
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '8cd7bf129d8304a85d4b2f2a369da38d')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '97c16808cd6799e530cc03321a70142c')"
     ]
   }
 }

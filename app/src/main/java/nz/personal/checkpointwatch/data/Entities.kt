@@ -11,7 +11,7 @@ import androidx.room.PrimaryKey
  * real (numeric) id was known; see [nz.personal.checkpointwatch.data.ScrapeRecorder] for how
  * those rows are bridged onto the real post once it appears.
  */
-@Entity(tableName = "posts", indices = [Index("createdAt")])
+@Entity(tableName = "posts", indices = [Index("createdAt"), Index("textHash")])
 data class PostEntity(
     @PrimaryKey val postId: String,
     val url: String,
@@ -55,7 +55,18 @@ data class ReportEntity(
 )
 
 /** The previous text of a post, kept when a rescan finds it was edited. */
-@Entity(tableName = "post_revisions")
+@Entity(
+    tableName = "post_revisions",
+    foreignKeys = [
+        ForeignKey(
+            entity = PostEntity::class,
+            parentColumns = ["postId"],
+            childColumns = ["postId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("postId")],
+)
 data class PostRevisionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val postId: String,
@@ -81,8 +92,32 @@ data class ScrapeEntity(
     val postsUpdated: Int,
 )
 
-/** Records that a given post was present in a given scan, for auditing/history. */
-@Entity(tableName = "scrape_sightings", primaryKeys = ["scrapeId", "postId"])
+/**
+ * Records that a given post was present in a given scan, for auditing/history.
+ *
+ * Both parents cascade: dropping an old scrape (retention) takes its sightings with it, and so
+ * does dropping a post — including the `dom:` placeholder row the recorder replaces once the real
+ * numeric id turns up, whose sightings are not worth carrying across the bridge.
+ */
+@Entity(
+    tableName = "scrape_sightings",
+    primaryKeys = ["scrapeId", "postId"],
+    foreignKeys = [
+        ForeignKey(
+            entity = ScrapeEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["scrapeId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = PostEntity::class,
+            parentColumns = ["postId"],
+            childColumns = ["postId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("scrapeId"), Index("postId")],
+)
 data class SightingEntity(
     val scrapeId: Long,
     val postId: String,

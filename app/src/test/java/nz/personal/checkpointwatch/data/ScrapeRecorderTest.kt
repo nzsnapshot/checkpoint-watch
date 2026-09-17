@@ -5,6 +5,7 @@ import nz.personal.checkpointwatch.collect.RawPost
 import nz.personal.checkpointwatch.model.ReportType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -134,6 +135,190 @@ class ScrapeRecorderTest {
         assertTrue(store.posts.getValue("11").gapBefore)
         assertFalse(store.posts.getValue("10").gapBefore)
         assertFalse(store.posts.getValue("1").gapBefore)
+    }
+
+    // --- the gap flag heals -----------------------------------------------------------------
+    //
+    // A scan is a contiguous newest-first slice of the feed. So when a scan contains a post that
+    // is flagged as having a gap before it, AND contains something older than that post, the scan
+    // has just shown what was on the other side of the gap: the flag is no longer true and must
+    // come off, or the "Earlier posts unavailable" divider stays on screen forever.
+
+    @Test
+    fun aLaterScanReachingPastAGapFlagClearsIt() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        // An old scan, then a single-post scan with no overlap at all: the gap rule fires.
+        recorder.record(
+            listOf(post("1", checkpointText)),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+        val lonely = t0.plus(5, ChronoUnit.HOURS)
+        recorder.record(
+            listOf(post("20", "Newest post, nothing else came back", createdAt = lonely)),
+            lonely,
+            lonely.plusSeconds(5),
+            ScanTrigger.BACKGROUND,
+            CollectorKind.HTTP,
+            "done",
+        )
+        assertTrue(store.posts.getValue("20").gapBefore)
+
+        // The next full scan sees that post again and the ones underneath it.
+        val full = lonely.plus(1, ChronoUnit.HOURS)
+        val posts = listOf(post("20", "Newest post, nothing else came back", createdAt = lonely)) +
+            (19 downTo 12).map { n ->
+                post("$n", "Filler post $n", createdAt = lonely.minus((20 - n).toLong(), ChronoUnit.MINUTES))
+            }
+        val third = recorder.record(posts, full, full.plusSeconds(5), ScanTrigger.FOREGROUND, CollectorKind.WEBVIEW, "done")
+
+        assertEquals(ScrapeStatus.OK, third.status)
+        assertTrue("no gap flag should survive", store.posts.values.none { it.gapBefore })
+    }
+
+    @Test
+    fun aGapNoLaterScanEverReachesPastKeepsItsFlag() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        recorder.record(
+            listOf(post("1", checkpointText)),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+        val newer = t0.plus(5, ChronoUnit.HOURS)
+        val older = t0.plus(4, ChronoUnit.HOURS)
+        val gapScan = listOf(
+            post("20", "New post A", createdAt = newer),
+            post("19", "New post B", createdAt = older),
+        )
+        recorder.record(gapScan, newer, newer.plusSeconds(5), ScanTrigger.FOREGROUND, CollectorKind.WEBVIEW, "done")
+        assertTrue(store.posts.getValue("19").gapBefore)
+
+        // Every later scan returns the same slice: nothing older than the flagged post is ever
+        // shown, so nothing proves the gap was filled.
+        val again = newer.plus(1, ChronoUnit.HOURS)
+        recorder.record(gapScan, again, again.plusSeconds(5), ScanTrigger.FOREGROUND, CollectorKind.WEBVIEW, "done")
+
+        assertTrue("a real gap must stay marked", store.posts.getValue("19").gapBefore)
+    }
+
+    @Test
+    fun aGapOnADomPlaceholderIsClearedWhenTheBridgedScanReachesPastIt() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        recorder.record(
+            listOf(post("1", "An older post from an earlier scan")),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+        // A DOM-fallback scan with no overlap: the placeholder row carries the gap flag.
+        val domTime = t0.plus(5, ChronoUnit.HOURS)
+        recorder.record(
+            listOf(post("dom:abc123", checkpointText, createdAt = domTime, approx = true)),
+            domTime,
+            domTime.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW_DOM,
+            "done",
+        )
+        assertTrue(store.posts.getValue("dom:abc123").gapBefore)
+
+        // The JSON feed comes back: the same post under its real id, plus an older neighbour.
+        val full = domTime.plus(30, ChronoUnit.MINUTES)
+        recorder.record(
+            listOf(
+                post("789", checkpointText, createdAt = domTime),
+                post("788", "The post underneath it", createdAt = domTime.minus(20, ChronoUnit.MINUTES)),
+            ),
+            full,
+            full.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertNull(store.posts["dom:abc123"])
+        assertFalse("the bridged row must not inherit a healed gap", store.posts.getValue("789").gapBefore)
+        assertTrue(store.posts.values.none { it.gapBefore })
+    }
+
+    // --- retention --------------------------------------------------------------------------
+
+    @Test
+    fun recordingSweepsScrapesOlderThanTheRetentionWindow() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        val ancient = t0.minus(RetentionPolicy.SCRAPE_HISTORY).minusSeconds(60)
+        recorder.record(
+            listOf(post("1", checkpointText, createdAt = ancient)),
+            ancient,
+            ancient.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+        assertEquals(1, store.scrapes.size)
+        assertEquals(1, store.sightings.size)
+
+        recorder.record(
+            listOf(post("2", "A post from today", createdAt = t0)),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertEquals("the month-old scrape row is gone", 1, store.scrapes.size)
+        assertEquals(t0.toEpochMilli(), store.scrapes.single().startedAt)
+        assertEquals("its sighting went with it", listOf("2"), store.sightings.map { it.postId })
+        assertTrue("but its post stayed", store.posts.containsKey("1"))
+    }
+
+    @Test
+    fun recordingSweepsPostsOnlyWhenBothClocksAreOlderThanTheWindow() = runTest {
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+
+        val ancient = t0.minus(RetentionPolicy.POST_HISTORY).minusSeconds(60)
+        recorder.record(
+            listOf(
+                post("old", "A post nobody has seen for half a year", createdAt = ancient),
+                post("oldButSeen", "An old post the page still shows", createdAt = ancient),
+            ),
+            ancient,
+            ancient.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        recorder.record(
+            listOf(post("oldButSeen", "An old post the page still shows", createdAt = ancient)),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        assertNull("created and last seen long ago: dropped", store.posts["old"])
+        assertNotNull("seen again today: kept", store.posts["oldButSeen"])
+        assertTrue("its reports went with it", store.reportsByPost["old"] == null)
     }
 
     @Test

@@ -29,5 +29,12 @@ class RoomScrapeStore(private val db: AppDatabase) : ScrapeStore {
 
     override suspend fun insertScrape(s: ScrapeEntity): Long = db.scrapeDao().insert(s)
 
+    override suspend fun updateScrape(s: ScrapeEntity) = db.scrapeDao().update(s)
+
     override suspend fun insertSighting(s: SightingEntity) = db.scrapeDao().insertSighting(s)
+
+    override suspend fun deleteScrapesStartedBefore(cutoffMs: Long): Int =
+        db.scrapeDao().deleteStartedBefore(cutoffMs)
+
+    override suspend fun deleteStalePosts(cutoffMs: Long): Int = db.postDao().deleteStale(cutoffMs)
 }

@@ -39,9 +39,24 @@ class ScrapeRecorder(private val store: ScrapeStore) {
         val finishedAtMs = finishedAt.toEpochMilli()
         val distinctPosts = dedupeIncoming(posts)
 
+        // The scrape row goes in before anything that references it (a sighting's foreign key),
+        // carrying provisional counts; the merge below is what learns the real ones.
+        val provisional = scrapeRow(
+            startedAt = startedAt,
+            finishedAt = finishedAt,
+            status = failure ?: ScrapeStatus.FAILED_NO_DATA,
+            endReason = endReason,
+            trigger = trigger,
+            collector = collector,
+            seen = 0,
+            new = 0,
+            updated = 0,
+        )
+        val scrapeId = store.insertScrape(provisional)
+
         if (distinctPosts.isEmpty()) {
             val status = failure ?: ScrapeStatus.FAILED_NO_DATA
-            val scrapeId = insertScrapeRow(startedAt, finishedAt, status, endReason, trigger, collector, seen = 0, new = 0, updated = 0)
+            RetentionPolicy.sweep(store, finishedAt)
             return@inTransaction ScrapeOutcome(scrapeId, status, seen = 0, new = 0, updated = 0, newReports = emptyList())
         }
 
@@ -57,18 +72,18 @@ class ScrapeRecorder(private val store: ScrapeStore) {
         val mergeStatus = if (gapApplies) ScrapeStatus.OK_WITH_GAP else ScrapeStatus.OK
         val status = failure ?: mergeStatus
 
-        val scrapeId = insertScrapeRow(
-            startedAt,
-            finishedAt,
-            status,
-            endReason,
-            trigger,
-            collector,
-            seen = distinctPosts.size,
-            new = merge.newCount,
-            updated = merge.updatedCount,
+        store.updateScrape(
+            provisional.copy(
+                id = scrapeId,
+                status = status.name,
+                postsSeen = distinctPosts.size,
+                postsNew = merge.newCount,
+                postsUpdated = merge.updatedCount,
+            ),
         )
         merge.sightingPostIds.forEach { store.insertSighting(SightingEntity(scrapeId, it)) }
+
+        RetentionPolicy.sweep(store, finishedAt)
 
         ScrapeOutcome(
             scrapeId = scrapeId,
@@ -117,6 +132,12 @@ class ScrapeRecorder(private val store: ScrapeStore) {
         val sightingPostIds = mutableListOf<String>()
         var oldestNewPost: PostEntity? = null
         var oldestNewPostCreatedAt: Instant? = null
+
+        /**
+         * Rows this scan matched that carry a gap flag, as (the id they now live under, the time
+         * of the incoming post that matched them). Candidates for [healGaps].
+         */
+        val gapCandidates = mutableListOf<Pair<String, Instant>>()
     }
 
     private suspend fun mergePosts(posts: List<RawPost>, finishedAtMs: Long): MergeResult {
@@ -151,6 +172,17 @@ class ScrapeRecorder(private val store: ScrapeStore) {
             }
 
             result.matches++
+            if (existing.gapBefore) {
+                // Where the row ends up: a dom: placeholder is about to become the numeric post.
+                val landsUnder = if (byId == null && existing.postId.startsWith(DOM_ID_PREFIX) &&
+                    !post.postId.startsWith(DOM_ID_PREFIX)
+                ) {
+                    post.postId
+                } else {
+                    existing.postId
+                }
+                result.gapCandidates += landsUnder to post.createdAt
+            }
 
             if (byId != null) {
                 // Direct id match: same post seen again, possibly edited.
@@ -197,7 +229,32 @@ class ScrapeRecorder(private val store: ScrapeStore) {
                 result.sightingPostIds += existing.postId
             }
         }
+        healGaps(posts, result)
         return result
+    }
+
+    /**
+     * Takes the gap flag off any post this scan has just reached past.
+     *
+     * A scan is a contiguous newest-first slice of the feed: whatever it returns, it returns with
+     * nothing missing in between. So if a post that was flagged "history before this is unknown"
+     * turns up in this scan *and* this scan also contains a post older than it, the older posts on
+     * the far side of the supposed gap are exactly what we are now looking at — the flag was only
+     * ever true of the scan that set it (a one-post HTTP fallback, a scan cancelled early), and
+     * leaving it on would keep an "Earlier posts unavailable" divider on screen for good.
+     *
+     * Setting a gap is unchanged: zero overlap with existing data still means a gap. Only the
+     * healing is new, and the two can never happen in the same scan — healing needs a match, and
+     * the gap rule only fires when there were none.
+     */
+    private suspend fun healGaps(posts: List<RawPost>, result: MergeResult) {
+        if (result.gapCandidates.isEmpty()) return
+        val oldestInScan = posts.minOfOrNull { it.createdAt } ?: return
+        for ((postId, matchedAt) in result.gapCandidates) {
+            if (!oldestInScan.isBefore(matchedAt)) continue
+            val row = store.findPost(postId) ?: continue
+            if (row.gapBefore) store.updatePost(row.copy(gapBefore = false))
+        }
     }
 
     private suspend fun insertNewPost(post: RawPost, finishedAtMs: Long): PostEntity {
@@ -223,7 +280,7 @@ class ScrapeRecorder(private val store: ScrapeStore) {
         return parsed
     }
 
-    private suspend fun insertScrapeRow(
+    private fun scrapeRow(
         startedAt: Instant,
         finishedAt: Instant,
         status: ScrapeStatus,
@@ -233,18 +290,16 @@ class ScrapeRecorder(private val store: ScrapeStore) {
         seen: Int,
         new: Int,
         updated: Int,
-    ): Long = store.insertScrape(
-        ScrapeEntity(
-            startedAt = startedAt.toEpochMilli(),
-            finishedAt = finishedAt.toEpochMilli(),
-            status = status.name,
-            endReason = endReason,
-            trigger = trigger.name,
-            collector = collector.name,
-            postsSeen = seen,
-            postsNew = new,
-            postsUpdated = updated,
-        ),
+    ): ScrapeEntity = ScrapeEntity(
+        startedAt = startedAt.toEpochMilli(),
+        finishedAt = finishedAt.toEpochMilli(),
+        status = status.name,
+        endReason = endReason,
+        trigger = trigger.name,
+        collector = collector.name,
+        postsSeen = seen,
+        postsNew = new,
+        postsUpdated = updated,
     )
 
     private fun ParsedReport.toEntity(postId: String) = ReportEntity(

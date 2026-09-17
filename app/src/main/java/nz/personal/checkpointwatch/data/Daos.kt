@@ -26,6 +26,14 @@ interface PostDao {
 
     @Query("DELETE FROM posts WHERE postId = :postId")
     suspend fun deleteById(postId: String)
+
+    /**
+     * Retention. Both clocks have to agree: a post the page still shows (recent `lastSeenAt`) is
+     * kept however old it is, and a post back-dated by the DOM fallback is kept until it has also
+     * stopped being seen.
+     */
+    @Query("DELETE FROM posts WHERE lastSeenAt < :cutoffMs AND createdAt < :cutoffMs")
+    suspend fun deleteStale(cutoffMs: Long): Int
 }
 
 @Dao
@@ -79,8 +87,15 @@ interface ScrapeDao {
     @Insert
     suspend fun insert(scrape: ScrapeEntity): Long
 
+    @Update
+    suspend fun update(scrape: ScrapeEntity)
+
     @Insert
     suspend fun insertSighting(sighting: SightingEntity)
+
+    /** Retention: the sightings of a dropped scrape go with it, by cascade. */
+    @Query("DELETE FROM scrapes WHERE startedAt < :cutoffMs")
+    suspend fun deleteStartedBefore(cutoffMs: Long): Int
 
     @Query("SELECT * FROM scrapes ORDER BY startedAt DESC LIMIT :n")
     fun observeRecent(n: Int): Flow<List<ScrapeEntity>>

@@ -19,6 +19,20 @@ interface ScrapeStore {
 
     suspend fun replaceReports(postId: String, reports: List<ReportEntity>)
 
+    /**
+     * The scrape row is inserted first, before any sighting can reference it, and rewritten at the
+     * end of the transaction once the merge knows its status and counts.
+     */
     suspend fun insertScrape(s: ScrapeEntity): Long
+    suspend fun updateScrape(s: ScrapeEntity)
     suspend fun insertSighting(s: SightingEntity)
+
+    /** Retention: drops scrape rows (and, by cascade, their sightings). Returns rows removed. */
+    suspend fun deleteScrapesStartedBefore(cutoffMs: Long): Int
+
+    /**
+     * Retention: drops posts last seen *and* created before the cutoff, with their reports,
+     * revisions and sightings. Returns rows removed.
+     */
+    suspend fun deleteStalePosts(cutoffMs: Long): Int
 }
