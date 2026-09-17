@@ -22,8 +22,8 @@ val keystoreProperties = Properties().apply {
 }
 
 // versionCode/versionName are overridable per release build: `-PversionCode=2 -PversionName=1.1.0`.
-val releaseVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 2
-val releaseVersionName = project.findProperty("versionName") as String? ?: "1.0.1"
+val releaseVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 3
+val releaseVersionName = project.findProperty("versionName") as String? ?: "1.0.2"
 
 android {
     namespace = "nz.personal.checkpointwatch"
