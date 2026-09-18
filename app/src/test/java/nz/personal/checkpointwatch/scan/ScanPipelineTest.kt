@@ -4,6 +4,7 @@ import nz.personal.checkpointwatch.collect.CollectResult
 import nz.personal.checkpointwatch.collect.DomPost
 import nz.personal.checkpointwatch.collect.EndReason
 import nz.personal.checkpointwatch.collect.PluginPost
+import nz.personal.checkpointwatch.collect.RawPost
 import nz.personal.checkpointwatch.data.CollectorKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -202,5 +203,85 @@ class ScanPipelineTest {
 
         assertEquals(CollectorKind.NONE, kind)
         assertTrue(posts.isEmpty())
+    }
+
+    // --- the home collector's posts, joined to whatever the phone found ---------------------
+
+    private fun relayPost(id: String, text: String, at: Long = 1758186000, image: String? = null) = RawPost(
+        postId = id,
+        createdAt = Instant.ofEpochSecond(at),
+        createdAtApprox = false,
+        text = text,
+        url = "https://www.facebook.com/CheckpointNZ/posts/$id",
+        imageUrl = image,
+    )
+
+    @Test
+    fun `relay posts the phone did not find are added, and the scan keeps its own label`() {
+        val scan = ScanPipeline.choose(
+            result(jsonChunks = listOf(jsonChunk("111", "CHECKPOINT - Lincoln Road, HENDERSON"))),
+            { emptyList() },
+            scanTime,
+        )
+
+        val (posts, kind) = ScanPipeline.withRelay(
+            scan,
+            listOf(relayPost("222", "CRASH - Queen Street", at = 1758186600), relayPost("111", "CHECKPOINT - Lincoln Road, HENDERSON")),
+        )
+
+        assertEquals(CollectorKind.WEBVIEW, kind)
+        assertEquals(listOf("222", "111"), posts.map { it.postId })
+    }
+
+    @Test
+    fun `a scan that found nothing is rescued by the relay and labelled as such`() {
+        val scan = ScanPipeline.choose(result(), { emptyList() }, scanTime)
+
+        val (posts, kind) = ScanPipeline.withRelay(scan, listOf(relayPost("222", "CRASH - Queen Street")))
+
+        assertEquals(CollectorKind.RELAY, kind)
+        assertEquals(listOf("222"), posts.map { it.postId })
+    }
+
+    @Test
+    fun `no relay posts leaves the scan exactly as it was`() {
+        val scan = ScanPipeline.choose(result(), { emptyList() }, scanTime)
+
+        assertEquals(scan, ScanPipeline.withRelay(scan, emptyList()))
+    }
+
+    @Test
+    fun `a widget post and its relay twin are one post, and the one with the real id is kept`() {
+        // The widget only ever has a synthetic id. The relay's copy of the same words carries the
+        // real one, so it is the copy worth keeping - with the widget's photo if it has none.
+        val photo = "https://scontent.fakl1-3.fna.fbcdn.net/v/a.png"
+        val scan = ScanPipeline.choose(
+            result(pluginPosts = listOf(pluginPost("CHECKPOINT - Trig Road", image = photo))),
+            { emptyList() },
+            scanTime,
+        )
+
+        val (posts, kind) = ScanPipeline.withRelay(scan, listOf(relayPost("333", "CHECKPOINT - Trig Road")))
+
+        assertEquals(CollectorKind.PLUGIN, kind)
+        assertEquals(listOf("333"), posts.map { it.postId })
+        assertEquals(photo, posts.single().imageUrl)
+    }
+
+    @Test
+    fun `a photo only the relay saw is carried onto the phone's copy`() {
+        val photo = "https://scontent.fakl1-3.fna.fbcdn.net/v/a.png"
+        val scan = ScanPipeline.choose(
+            result(jsonChunks = listOf(jsonChunk("111", "CHECKPOINT - Lincoln Road, HENDERSON"))),
+            { emptyList() },
+            scanTime,
+        )
+
+        val (posts, _) = ScanPipeline.withRelay(
+            scan,
+            listOf(relayPost("111", "CHECKPOINT - Lincoln Road, HENDERSON", image = photo)),
+        )
+
+        assertEquals(photo, posts.single().imageUrl)
     }
 }

@@ -141,6 +141,7 @@
          "how many could it possibly have seen?" is the question this row exists to answer. -->
     <string name="collector_plugin">Page widget (5 newest)</string>
     <string name="collector_http">Newest post only</string>
+    <string name="collector_relay">Home collector</string>
     <string name="collector_none">Nothing collected</string>
 
     <!-- Settings: scan details. The hidden WebView cannot be inspected from outside the app, so

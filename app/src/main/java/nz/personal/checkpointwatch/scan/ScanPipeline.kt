@@ -24,6 +24,9 @@ import java.time.Instant
  */
 object ScanPipeline {
 
+    /** How a post with no real id is marked; see [DomPostExtractor]. */
+    private const val DOM_ID_PREFIX = "dom:"
+
     /**
      * @param result what the WebView scan captured, or `null` when there was no WebView scan
      *   (or when the caller already knows it yielded nothing and is only offering HTTP chunks).
@@ -49,6 +52,41 @@ object ScanPipeline {
         if (fromHttp.isNotEmpty()) return fromHttp to CollectorKind.HTTP
 
         return emptyList<RawPost>() to CollectorKind.NONE
+    }
+
+    /**
+     * The scan's posts, plus the home collector's that are not already among them.
+     *
+     * Used when the relay was too old to stand in for a scan but still knows about posts this
+     * phone, rationed to one or five, will never be shown. The same sameness as [join] — the id
+     * where both have a real one, otherwise the words — and the same rule about which copy wins:
+     * the one with the real post id, carrying across a photo only the other one saw.
+     *
+     * The label stays the scan's own, for the reason [join] gives. Only a scan that found nothing
+     * at all is credited to the relay, because then the relay is all there is.
+     */
+    fun withRelay(
+        scan: Pair<List<RawPost>, CollectorKind>,
+        relayPosts: List<RawPost>,
+    ): Pair<List<RawPost>, CollectorKind> {
+        if (relayPosts.isEmpty()) return scan
+        val (scanPosts, scanKind) = scan
+        if (scanPosts.isEmpty()) return relayPosts.sortedByDescending { it.createdAt } to CollectorKind.RELAY
+
+        val relayById = relayPosts.associateBy { it.postId }
+        val relayByHash = relayPosts.associateBy { DomPostExtractor.textHash(it.text) }
+        val merged = scanPosts.map { post ->
+            val twin = relayById[post.postId] ?: relayByHash[DomPostExtractor.textHash(post.text)]
+            when {
+                twin == null -> post
+                post.postId.startsWith(DOM_ID_PREFIX) -> twin.copy(imageUrl = twin.imageUrl ?: post.imageUrl)
+                else -> post.copy(imageUrl = post.imageUrl ?: twin.imageUrl)
+            }
+        }
+        val ids = merged.mapTo(mutableSetOf()) { it.postId }
+        val hashes = merged.mapTo(mutableSetOf()) { DomPostExtractor.textHash(it.text) }
+        val added = relayPosts.filterNot { it.postId in ids || DomPostExtractor.textHash(it.text) in hashes }
+        return (merged + added).distinctBy { it.postId }.sortedByDescending { it.createdAt } to scanKind
     }
 
     /**

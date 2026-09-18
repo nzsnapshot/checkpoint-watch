@@ -26,6 +26,13 @@ enum class CollectorKind {
     /** The plain HTTPS GET, which can only ever see the newest post. */
     HTTP,
 
+    /**
+     * The home collector's feed: a PC on an ordinary connection scans the page and publishes what
+     * it finds, for phones Facebook will not show the feed to. No WebView ran for a scan labelled
+     * this way, or one ran and found nothing.
+     */
+    RELAY,
+
     NONE,
 }
 

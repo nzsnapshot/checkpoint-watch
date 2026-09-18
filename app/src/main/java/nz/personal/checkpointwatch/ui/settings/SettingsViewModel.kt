@@ -145,6 +145,7 @@ object ScanHistoryUi {
         CollectorKind.WEBVIEW_DOM -> R.string.collector_webview_dom
         CollectorKind.PLUGIN -> R.string.collector_plugin
         CollectorKind.HTTP -> R.string.collector_http
+        CollectorKind.RELAY -> R.string.collector_relay
         CollectorKind.NONE -> R.string.collector_none
     }
 }
