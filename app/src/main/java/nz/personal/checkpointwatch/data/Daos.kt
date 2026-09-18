@@ -38,6 +38,18 @@ interface PostDao {
     @Query("UPDATE posts SET imagePath = :path WHERE postId = :postId AND imagePath IS NULL")
     suspend fun setImagePath(postId: String, path: String)
 
+    /**
+     * Posts with a photo somewhere and no copy of it yet, newest first. Bounded both ways: the
+     * address expires within days, so an old post is not worth asking about, and a scan only has
+     * so much of the phone's time to spend.
+     */
+    @Query(
+        "SELECT postId, imageUrl FROM posts " +
+            "WHERE imageUrl IS NOT NULL AND imagePath IS NULL AND createdAt >= :sinceMs " +
+            "ORDER BY createdAt DESC LIMIT :limit",
+    )
+    suspend fun pendingImages(sinceMs: Long, limit: Int): List<PendingImageRow>
+
     /** Every downloaded photo still spoken for, for the orphan sweep. */
     @Query("SELECT imagePath FROM posts WHERE imagePath IS NOT NULL")
     suspend fun allImagePaths(): List<String>

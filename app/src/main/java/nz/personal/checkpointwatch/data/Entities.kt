@@ -157,3 +157,9 @@ data class ReportRow(
     /** The downloaded photo, if this post had one and it arrived. */
     val imagePath: String? = null,
 )
+
+/** A post whose photo has not been downloaded yet; see [PostDao.pendingImages]. */
+data class PendingImageRow(
+    val postId: String,
+    val imageUrl: String,
+)
