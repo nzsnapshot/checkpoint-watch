@@ -8,7 +8,7 @@ Read this first, then `README.md` and `docs/superpowers/specs/2026-09-18-checkpo
 | Thing | State |
 |---|---|
 | `main` | Released app **v1.0.2** (tag `v1.0.2`, signed APK on the Releases page, installed via Obtainium). |
-| branch `feat/home-collector` | Home collector (Node + Playwright) — core DONE and tested (46 `node:test` tests pass): `collector/src/extract.js`, `scan.js`, `publish.js`, `index.js`. **NOT done:** Windows/Linux/macOS installers, `status-windows.ps1`, `collector/README.md`, a real run on a non-VPN connection. `collector/run-windows.ps1` is an unfinished first draft. |
+| home collector (`collector/`, merged to `main` 2026-09-18) | **DONE and running** on the home Windows PC since 2026-09-18 as Scheduled Task `CheckpointWatchCollector` (`collector/install-task.ps1`, `-Remove` to uninstall). The `data` branch is live and `feed.json` is public at the URL below. First day: 194 of 195 cycles returned `FEED`; the one miss was a DNS blip that recovered on the next cycle. Setup steps are in `README.md` under "The home collector". **Not written, not currently needed:** Linux/macOS installers, `status-windows.ps1`, the Startup-folder fallback (the task restarts on failure instead). |
 | branch `feat/v1.1.0` | App v1.1.0 in progress; unit tests pass at the last commit. **Done:** page-widget fallback collector (second WebView pass), early `NO_FEED` end for starved scans, VPN hint in the banner, scan-history labels, Room **migration 1→2** (`posts.imageUrl`, `posts.imagePath`) with exported schema. **NOT done:** recorder persisting `imageUrl`, `ImageStore` download/cache/retention, image UI (thumbnail + expanded image), **Map button** (`geo:` intent, OSM fallback), **relay-feed reader** (below), version bump to 1.1.0 / code 4, README + spec updates, screenshots. |
 
 ## What we learned the hard way (evidence, not guesses)
@@ -38,7 +38,7 @@ Newest first, up to 150 posts / 72 h. `outcome` is `FEED | STARVED | BLOCKED | E
 
 ## To do on the Windows PC, in order
 
-1. **Collector** (`git checkout feat/home-collector`):
+1. **Collector — DONE 2026-09-18, kept here as the record of what was asked for** (`git checkout feat/home-collector`):
    - Prerequisites: Node 18+ (`winget install OpenJS.NodeJS.LTS`), git, `gh auth login` (HTTPS) so the PC can push to the repo, and **no VPN on this PC**.
    - `cd collector; npm install; npx playwright install chromium; npm test`
    - `node src\index.js --once --dry-run` → expect `FEED` with ~10 posts. `STARVED` means this connection is being limited (VPN?).
