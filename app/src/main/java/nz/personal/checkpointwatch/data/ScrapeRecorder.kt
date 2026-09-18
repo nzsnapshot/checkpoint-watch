@@ -265,15 +265,16 @@ class ScrapeRecorder(private val store: ScrapeStore) {
     }
 
     /**
-     * Where this post's photo lives, learned once and then left alone.
+     * Where this post's photo lives: left alone once the photo is on disk, kept current until then.
      *
-     * The first address wins. Facebook re-signs these URLs, so a later scan's "new" URL is the
-     * same photo with a different signature — taking it would change nothing about the picture and
-     * would send `ImageStore` off to download it again on a post whose copy is already on disk.
-     * The only move is from "we don't know" to "we do".
+     * Facebook re-signs these URLs, so a later scan's "new" URL is the same photo with a different
+     * signature. Once `ImageStore` has its copy that is a reason to ignore it — nothing about the
+     * picture has changed. Before then it is a reason to take it: the signature is what expires,
+     * and a post first seen while the phone could not download would otherwise hold a dead address
+     * and turn away every live one. A sighting with no photo never takes an address away.
      */
     private fun keptImageUrl(existing: PostEntity, post: RawPost): String? =
-        existing.imageUrl ?: post.imageUrl
+        if (existing.imagePath != null) existing.imageUrl else post.imageUrl ?: existing.imageUrl
 
     private suspend fun insertNewPost(post: RawPost, finishedAtMs: Long): PostEntity {
         val entity = PostEntity(

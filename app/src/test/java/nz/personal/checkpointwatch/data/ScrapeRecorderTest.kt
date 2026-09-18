@@ -712,6 +712,8 @@ class ScrapeRecorderTest {
             CollectorKind.WEBVIEW,
             "done",
         )
+        // ImageStore has been and gone: the copy is on disk.
+        store.posts["1"] = store.posts.getValue("1").copy(imagePath = "abc.img")
 
         recorder.record(
             listOf(post("1", checkpointText, imageUrl = "https://scontent.test.fbcdn.net/photo.jpg?sig=second")),
@@ -724,6 +726,46 @@ class ScrapeRecorderTest {
 
         assertEquals(
             "https://scontent.test.fbcdn.net/photo.jpg?sig=first",
+            store.posts.getValue("1").imageUrl,
+        )
+    }
+
+    @Test
+    fun aPhotoNotYetDownloadedFollowsTheNewestAddress_becauseTheOldOneExpires() = runTest {
+        // The signature that makes the second URL "the same photo" is also what makes the first
+        // one stop working. A phone that was offline when the post first appeared would otherwise
+        // hold a dead address for ever and ignore every live one it was later handed.
+        val store = FakeScrapeStore()
+        val recorder = ScrapeRecorder(store)
+        recorder.record(
+            listOf(post("1", checkpointText, imageUrl = "https://scontent.test.fbcdn.net/photo.jpg?sig=first")),
+            t0,
+            t0.plusSeconds(5),
+            ScanTrigger.FOREGROUND,
+            CollectorKind.WEBVIEW,
+            "done",
+        )
+
+        recorder.record(
+            listOf(post("1", checkpointText, imageUrl = "https://scontent.test.fbcdn.net/photo.jpg?sig=second")),
+            t0.plusSeconds(600),
+            t0.plusSeconds(605),
+            ScanTrigger.BACKGROUND,
+            CollectorKind.RELAY,
+            "RELAY",
+        )
+        // ...and a later sighting with no photo at all takes nothing away.
+        recorder.record(
+            listOf(post("1", checkpointText)),
+            t0.plusSeconds(1200),
+            t0.plusSeconds(1205),
+            ScanTrigger.BACKGROUND,
+            CollectorKind.HTTP,
+            "done",
+        )
+
+        assertEquals(
+            "https://scontent.test.fbcdn.net/photo.jpg?sig=second",
             store.posts.getValue("1").imageUrl,
         )
     }
