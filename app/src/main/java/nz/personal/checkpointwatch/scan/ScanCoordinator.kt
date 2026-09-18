@@ -29,6 +29,9 @@ private val MIN_INTERVAL: Duration = Duration.ofMinutes(2)
 /** Nothing to fall back on: used for the pass that decides whether an HTTP fetch is needed. */
 private val NO_CHUNKS: () -> List<String> = { emptyList() }
 
+/** What a scan the relay answered is recorded as ending with: no WebView ran, so nothing ended. */
+private const val RELAY_END_REASON = "RELAY"
+
 /** Whether a scan is running right now; the UI's banner follows this. */
 sealed interface ScanState {
     data object Idle : ScanState
@@ -72,6 +75,9 @@ fun interface LatestFetcher {
  * pull-to-refresh, or [ScanWorker] in the background.
  *
  * Rules that live here rather than in a caller, so both callers get them:
+ *  - the home collector first — a PC on an ordinary connection sees the feed this phone, on its
+ *    VPN, is refused. When its published feed is fresh it *is* the scan and the page is never
+ *    opened; when it is not, the phone scans for itself and keeps the relay's posts as well;
  *  - one at a time — a scan while another is running is skipped (`null`), never queued;
  *  - not too often — without `force`, a scan within two minutes of the last one is skipped;
  *  - every run that got as far as collecting is recorded, success or failure, including a run
@@ -93,6 +99,11 @@ class ScanCoordinator(
      * scan Facebook rationed; it never decides whether or how a scan runs.
      */
     private val network: NetworkInfoProvider = NetworkInfoProvider { false },
+    /**
+     * The home collector's published feed. Defaults to one that is never there, which is simply
+     * the app as it was before the relay existed.
+     */
+    private val relay: RelaySource = RelaySource { RelayResult.Unreachable },
     private val clock: () -> Instant = Instant::now,
     /**
      * Where the parsing and the database work happen. Callers are on the main thread — the screen
@@ -141,6 +152,15 @@ class ScanCoordinator(
         host: WebViewHost,
         startedAt: Instant,
     ): ScrapeOutcome {
+        // Before the try: a scan abandoned while it was still asking the relay never reached the
+        // page, so there is no partial scan to save and nothing for the cancellation path to do.
+        val relayed = fetchRelay()
+        val relayState = RelayFreshness.stateOf(relayed, startedAt)
+        val relayPosts = (relayed as? RelayResult.Loaded)?.feed?.posts.orEmpty()
+        if (relayState == RelayState.FRESH && relayPosts.isNotEmpty()) {
+            return recordRelay(trigger, startedAt, relayPosts)
+        }
+
         try {
             val collected = collect(host)
 
@@ -157,11 +177,13 @@ class ScanCoordinator(
             val finishedAt = if (needsHttp) clock() else collectedAt
 
             val (outcome, chosen) = withContext(computeDispatcher) {
-                val chosen = if (needsHttp) {
+                val scanned = if (needsHttp) {
                     ScanPipeline.choose(null, { chunks }, finishedAt)
                 } else {
                     webView
                 }
+                // Too old to stand in for the scan, but a post it knows about is still a post.
+                val chosen = ScanPipeline.withRelay(scanned, relayPosts)
                 val (posts, kind) = chosen
                 recorder.record(
                     posts = posts,
@@ -173,7 +195,7 @@ class ScanCoordinator(
                     failure = failureFor(posts.isEmpty(), collected.end),
                 ) to chosen
             }
-            writeDiagnostics(trigger, collected, chosen, outcome.status)
+            writeDiagnostics(trigger, collected.end.name, collected.diagnostics, chosen, outcome.status, relayState)
             _lastSummary.value = ScanSummary(
                 status = outcome.status,
                 new = outcome.new,
@@ -193,6 +215,49 @@ class ScanCoordinator(
             withContext(NonCancellable + computeDispatcher) { recordCancelled(trigger, startedAt) }
             throw cancellation
         }
+    }
+
+    /** The relay is a shortcut, never a dependency: anything wrong with it is "not there". */
+    private suspend fun fetchRelay(): RelayResult =
+        try {
+            relay.fetch()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            RelayResult.Unreachable
+        }
+
+    /**
+     * The scan, when the home collector's feed is fresh: its posts, recorded like any other
+     * scan's, with no WebView and no request to Facebook at all.
+     *
+     * Never [ScanSummary.starved] — nothing was rationed, because nothing was asked for.
+     */
+    private suspend fun recordRelay(
+        trigger: ScanTrigger,
+        startedAt: Instant,
+        posts: List<RawPost>,
+    ): ScrapeOutcome {
+        val finishedAt = clock()
+        val outcome = withContext(computeDispatcher) {
+            recorder.record(
+                posts = posts,
+                startedAt = startedAt,
+                finishedAt = finishedAt,
+                trigger = trigger,
+                collector = CollectorKind.RELAY,
+                endReason = RELAY_END_REASON,
+                failure = null,
+            )
+        }
+        writeDiagnostics(trigger, RELAY_END_REASON, null, posts to CollectorKind.RELAY, outcome.status, RelayState.FRESH)
+        _lastSummary.value = ScanSummary(
+            status = outcome.status,
+            new = outcome.new,
+            finishedAt = finishedAt,
+            trigger = trigger,
+        )
+        return outcome
     }
 
     /**
@@ -242,7 +307,7 @@ class ScanCoordinator(
                 endReason = snapshot.end.name,
                 failure = ScrapeStatus.CANCELLED,
             )
-            writeDiagnostics(trigger, snapshot, chosen, ScrapeStatus.CANCELLED)
+            writeDiagnostics(trigger, snapshot.end.name, snapshot.diagnostics, chosen, ScrapeStatus.CANCELLED, null)
         } catch (_: Exception) {
             // Losing the record of a cancelled scan is a shame; replacing the cancellation with
             // a database error on the way out would be worse.
@@ -259,22 +324,26 @@ class ScanCoordinator(
      */
     private suspend fun writeDiagnostics(
         trigger: ScanTrigger,
-        collected: CollectResult,
+        endReason: String,
+        collectorDiagnostics: String?,
         chosen: Pair<List<RawPost>, CollectorKind>,
         status: ScrapeStatus,
+        /** `null` when the scan was cancelled: the relay's part in it no longer matters. */
+        relayState: RelayState?,
     ) {
         val store = diagnostics ?: return
         try {
             val header = DiagnosticsText.header(
-                listOf(
+                listOfNotNull(
                     "trigger" to trigger.name,
                     "status" to status.name,
-                    "endReason" to collected.end.name,
+                    "endReason" to endReason,
                     "collector" to chosen.second.name,
                     "postsExtracted" to chosen.first.size.toString(),
+                    relayState?.let { "relay" to it.name.lowercase() },
                 ),
             )
-            store.write(trigger, header + (collected.diagnostics.orEmpty()))
+            store.write(trigger, header + collectorDiagnostics.orEmpty())
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (_: Exception) {

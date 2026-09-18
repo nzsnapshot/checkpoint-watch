@@ -14,6 +14,8 @@ import kotlinx.coroutines.yield
 import nz.personal.checkpointwatch.collect.CollectResult
 import nz.personal.checkpointwatch.collect.DomPost
 import nz.personal.checkpointwatch.collect.EndReason
+import nz.personal.checkpointwatch.collect.RawPost
+import nz.personal.checkpointwatch.collect.RelayFeed
 import nz.personal.checkpointwatch.collect.WebViewHost
 import nz.personal.checkpointwatch.data.CollectorKind
 import nz.personal.checkpointwatch.data.FakeScrapeStore
@@ -44,6 +46,7 @@ class ScanCoordinatorTest {
     private val collector = FakeCollector()
     private val fetcher = FakeFetcher()
     private val diagnostics = FakeDiagnosticsStore()
+    private val relay = FakeRelay()
 
     /**
      * Stands in for `Dispatchers.Default` in production: a distinct dispatcher, so "the work ran
@@ -70,6 +73,7 @@ class ScanCoordinatorTest {
         lastFinishedAt = { lastFinishedAt },
         diagnostics = diagnostics,
         network = { vpnActive },
+        relay = relay,
         clock = { now },
         computeDispatcher = compute,
     )
@@ -376,6 +380,130 @@ class ScanCoordinatorTest {
         assertEquals(1, store.scrapes.size)
     }
 
+    // --- the home collector's feed ---------------------------------------------------------
+    //
+    // The phone is on a VPN and Facebook rations it; a PC at home is not, and publishes what it
+    // sees. So the feed is asked first, and the WebView is only woken when the feed cannot be
+    // trusted to be current.
+
+    private fun relayPost(id: String, text: String = "CRASH - Queen Street, CBD $id") = RawPost(
+        postId = id,
+        createdAt = startTime.minusSeconds(600),
+        createdAtApprox = false,
+        text = text,
+        url = "https://www.facebook.com/CheckpointNZ/posts/$id",
+    )
+
+    private fun relayFeed(ageMinutes: Long, vararg posts: RawPost) = RelayResult.Loaded(
+        RelayFeed(
+            generatedAt = startTime.minusSeconds(ageMinutes * 60),
+            lastFullScanAt = startTime.minusSeconds(ageMinutes * 60),
+            outcome = "FEED",
+            posts = posts.toList(),
+        ),
+    )
+
+    @Test
+    fun `a fresh relay feed is the scan, and the page is never opened`() = runTest {
+        relay.result = relayFeed(ageMinutes = 3, relayPost("501"), relayPost("502"))
+        collector.result = webViewResult()
+        val coordinator = coordinator()
+
+        val outcome = coordinator.scan(ScanTrigger.BACKGROUND, FakeHost, force = true)
+
+        assertEquals(ScrapeStatus.OK, outcome?.status)
+        assertEquals(2, outcome?.new)
+        assertEquals(0, collector.collectCalls)
+        assertEquals(0, fetcher.calls)
+        val scrape = store.scrapes.single()
+        assertEquals(CollectorKind.RELAY.name, scrape.collector)
+        assertEquals("RELAY", scrape.endReason)
+        assertEquals(setOf("501", "502"), store.posts.keys)
+        assertEquals(false, coordinator.lastSummary.value?.starved)
+        assertSame(ScanState.Idle, coordinator.state.value)
+    }
+
+    @Test
+    fun `a stale relay feed does not replace the scan, but its posts are still kept`() = runTest {
+        relay.result = relayFeed(ageMinutes = 45, relayPost("501"))
+        collector.result = webViewResult(postId = "111")
+
+        coordinator().scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        assertEquals(1, collector.collectCalls)
+        assertEquals(CollectorKind.WEBVIEW.name, store.scrapes.single().collector)
+        assertEquals(EndReason.NO_MORE_POSTS.name, store.scrapes.single().endReason)
+        assertEquals(setOf("111", "501"), store.posts.keys)
+    }
+
+    @Test
+    fun `a stale relay feed rescues a scan that found nothing at all`() = runTest {
+        relay.result = relayFeed(ageMinutes = 45, relayPost("501"))
+        collector.result = emptyResult(EndReason.NO_FEED)
+        fetcher.chunks = emptyList()
+
+        val outcome = coordinator().scan(ScanTrigger.BACKGROUND, FakeHost, force = true)
+
+        assertEquals(1, fetcher.calls)
+        assertEquals(ScrapeStatus.OK, outcome?.status)
+        assertEquals(CollectorKind.RELAY.name, store.scrapes.single().collector)
+        assertEquals(setOf("501"), store.posts.keys)
+    }
+
+    @Test
+    fun `a fresh feed with no posts in it is not a scan`() = runTest {
+        relay.result = relayFeed(ageMinutes = 3)
+        collector.result = webViewResult()
+
+        coordinator().scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        assertEquals(1, collector.collectCalls)
+        assertEquals(CollectorKind.WEBVIEW.name, store.scrapes.single().collector)
+    }
+
+    @Test
+    fun `with no relay to be had the scan runs exactly as it always did`() = runTest {
+        relay.result = RelayResult.Unreachable
+        collector.result = webViewResult()
+
+        val outcome = coordinator().scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        assertEquals(ScrapeStatus.OK, outcome?.status)
+        assertEquals(1, collector.collectCalls)
+        assertEquals(CollectorKind.WEBVIEW.name, store.scrapes.single().collector)
+    }
+
+    @Test
+    fun `a relay that throws is a relay that could not be reached`() = runTest {
+        relay.failure = IllegalStateException("boom")
+        collector.result = webViewResult()
+
+        val outcome = coordinator().scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        assertEquals(ScrapeStatus.OK, outcome?.status)
+        assertTrue(diagnostics.written.single().second.contains("relay=unreachable"))
+    }
+
+    @Test
+    fun `the diagnostics say what the relay was worth`() = runTest {
+        collector.result = webViewResult()
+        val expected = listOf(
+            relayFeed(ageMinutes = 3, relayPost("501")) to "relay=fresh",
+            relayFeed(ageMinutes = 45, relayPost("501")) to "relay=stale",
+            RelayResult.Unreachable to "relay=unreachable",
+            RelayResult.Invalid to "relay=invalid",
+        )
+
+        for ((result, line) in expected) {
+            relay.result = result
+            coordinator().scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+            assertTrue("expected $line in:\n${diagnostics.written.last().second}", diagnostics.written.last().second.contains(line))
+        }
+        // A scan the relay answered still says which trigger, which source and how many posts.
+        assertTrue(diagnostics.written.first().second.contains("collector=${CollectorKind.RELAY.name}"))
+        assertTrue(diagnostics.written.first().second.contains("postsExtracted=1"))
+    }
+
     // --- cancellation ----------------------------------------------------------------------
 
     @Test
@@ -502,6 +630,16 @@ class ScanCoordinatorTest {
         override suspend fun fetchChunks(): List<String> {
             calls++
             return chunks
+        }
+    }
+
+    private class FakeRelay : RelaySource {
+        var result: RelayResult = RelayResult.Unreachable
+        var failure: Exception? = null
+
+        override suspend fun fetch(): RelayResult {
+            failure?.let { throw it }
+            return result
         }
     }
 

@@ -5,6 +5,7 @@ import androidx.room.Room
 import nz.personal.checkpointwatch.collect.CollectResult
 import nz.personal.checkpointwatch.collect.FeedCollector
 import nz.personal.checkpointwatch.collect.HttpLatestFetcher
+import nz.personal.checkpointwatch.collect.RelayFeedFetcher
 import nz.personal.checkpointwatch.collect.WebViewHost
 import nz.personal.checkpointwatch.data.ALL_MIGRATIONS
 import nz.personal.checkpointwatch.data.AppDatabase
@@ -65,6 +66,7 @@ class AppContainer(context: Context) {
             lastFinishedAt = { database.scrapeDao().lastFinishedAt() },
             diagnostics = scanDiagnostics,
             network = AndroidNetworkInfoProvider(appContext),
+            relay = RelayFeedFetcher(),
         )
     }
 }
