@@ -39,6 +39,7 @@ class HomeStateBuilderTest {
         postText: String = "post text",
         gapBefore: Boolean = false,
         firstSeenAt: Long = postCreatedAt,
+        imagePath: String? = null,
     ) = ReportRow(
         id = id,
         postId = postId,
@@ -57,12 +58,29 @@ class HomeStateBuilderTest {
         postText = postText,
         gapBefore = gapBefore,
         firstSeenAt = firstSeenAt,
+        imagePath = imagePath,
     )
 
     private fun reportItems(built: HomeStateBuilder.Built) =
         built.items.filterIsInstance<ListItem.Report>().map { it.report }
 
     // --- totalReports -------------------------------------------------------------------------
+
+    @Test
+    fun `a post's photo rides on its first card only`() {
+        // One photo, one post - but a post can be three reports, and the same picture three times
+        // down the list would be noise. The first card is the one that carries it.
+        val at = now.minusSeconds(600).toEpochMilli()
+        val rows = listOf(
+            row(id = 1, postId = "p1", indexInPost = 0, postCreatedAt = at, imagePath = "abc.img"),
+            row(id = 2, postId = "p1", indexInPost = 1, road = "Trig Road", postCreatedAt = at, imagePath = "abc.img"),
+            row(id = 3, postId = "p2", postCreatedAt = at - 1000),
+        )
+
+        val built = HomeStateBuilder.build(rows, Settings(), now, newSince = null)
+
+        assertEquals(listOf("abc.img", null, null), reportItems(built).map { it.imagePath })
+    }
 
     @Test
     fun `totalReports counts every row before filtering`() {

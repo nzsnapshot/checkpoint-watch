@@ -51,6 +51,7 @@
     <string name="card_old">OLD</string>
     <string name="card_also_in">Also in %1$s</string>
     <string name="card_source">From %1$s</string>
+    <string name="card_photo">Photo from the post</string>
     <string name="card_full_post">Full post</string>
     <string name="card_open_facebook">Open on Facebook</string>
     <string name="card_open_failed">No app on this phone can open that link.</string>

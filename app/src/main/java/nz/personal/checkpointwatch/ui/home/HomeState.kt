@@ -227,8 +227,15 @@ object HomeStateBuilder {
     fun build(rows: List<ReportRow>, settings: Settings, now: Instant, newSince: Instant?): Built {
         val summary = buildSummary(rows, now)
         val lastRowIdByPost = lastRowIdByPost(rows)
+        val photoShown = mutableSetOf<String>()
         val allReports = rows.map { row ->
-            row.toReportUi(now = now, newSince = newSince, isLastInPost = row.id == lastRowIdByPost[row.postId])
+            row.toReportUi(
+                now = now,
+                newSince = newSince,
+                isLastInPost = row.id == lastRowIdByPost[row.postId],
+                // Rows arrive in post order, first report first.
+                carriesPhoto = photoShown.add(row.postId),
+            )
         }
         val mentionsById = AreaLinker.link(allReports)
         val visibleById = allReports
@@ -295,7 +302,12 @@ object HomeStateBuilder {
         return Summary(counts, freshest)
     }
 
-    private fun ReportRow.toReportUi(now: Instant, newSince: Instant?, isLastInPost: Boolean): ReportUi {
+    private fun ReportRow.toReportUi(
+        now: Instant,
+        newSince: Instant?,
+        isLastInPost: Boolean,
+        carriesPhoto: Boolean,
+    ): ReportUi {
         val at = at()
         return ReportUi(
             id = id,
@@ -314,6 +326,7 @@ object HomeStateBuilder {
             freshness = TimeFormat.freshness(at, now),
             gapAfter = gapBefore && isLastInPost,
             isNew = newSince != null && firstSeenAt >= newSince.toEpochMilli(),
+            imagePath = imagePath.takeIf { carriesPhoto },
         )
     }
 

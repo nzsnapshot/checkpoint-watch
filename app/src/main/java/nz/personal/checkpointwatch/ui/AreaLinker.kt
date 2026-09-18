@@ -36,6 +36,11 @@ data class ReportUi(
     val gapAfter: Boolean,
     val alsoInArea: List<AreaMention> = emptyList(),
     val isNew: Boolean,
+    /**
+     * The file name of the post's downloaded photo, on the post's first card only — a post can be
+     * several reports, and one picture repeated down the list would be noise.
+     */
+    val imagePath: String? = null,
 )
 
 /**

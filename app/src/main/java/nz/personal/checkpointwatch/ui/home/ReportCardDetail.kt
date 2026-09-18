@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import nz.personal.checkpointwatch.R
@@ -75,11 +76,24 @@ internal fun AlsoInArea(where: String, mentions: List<AreaMention>, now: Instant
     }
 }
 
+private const val FULL_DECODE_PX = 1280
+
 @Composable
 internal fun ExpandedDetail(report: ReportUi, showPost: Boolean, onOpenPost: (String) -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         HorizontalDivider(color = scheme.outlineVariant)
+        PostPhoto(path = report.imagePath, targetPx = FULL_DECODE_PX) { bitmap ->
+            PhotoImage(
+                bitmap = bitmap,
+                description = stringResource(R.string.card_photo),
+                // Whole, not cropped: opened, the picture is the thing being looked at.
+                scale = ContentScale.FillWidth,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp)),
+            )
+        }
         // Most posts are the card with emoji on them; the full text is only worth the space when
         // it carries something the card does not — a second report, or a line the parser dropped.
         if (showPost) {

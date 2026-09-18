@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,6 +37,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
@@ -60,6 +62,10 @@ import java.util.Locale
 
 /** The coloured edge that carries the type through the whole list. */
 private val RAIL_WIDTH = 4.dp
+
+/** A strip rather than a square: the page's photos are wide maps and street views. */
+private val THUMBNAIL_HEIGHT = 96.dp
+private const val THUMBNAIL_DECODE_PX = 512
 
 /** Details longer than this are cut until the card is opened. */
 private const val COLLAPSED_DETAIL_LINES = 3
@@ -169,6 +175,22 @@ fun ReportCard(
                 modifier = Modifier.alpha(bodyAlpha),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // Closed, the photo is a thumbnail beside the words; opened, it moves below them at
+                // full width and full strength, so it is never on the card twice.
+                if (!expanded) {
+                    PostPhoto(path = report.imagePath, targetPx = THUMBNAIL_DECODE_PX) { bitmap ->
+                        PhotoImage(
+                            bitmap = bitmap,
+                            description = null,
+                            scale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(THUMBNAIL_HEIGHT)
+                                .clip(RoundedCornerShape(12.dp)),
+                        )
+                    }
+                }
+
                 if (report.details.isNotBlank()) {
                     Text(
                         text = report.details,

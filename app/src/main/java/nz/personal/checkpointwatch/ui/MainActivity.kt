@@ -11,6 +11,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
@@ -20,7 +21,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import nz.personal.checkpointwatch.App
 import nz.personal.checkpointwatch.collect.ActivityHost
+import nz.personal.checkpointwatch.ui.home.LocalPhotoFiles
 import nz.personal.checkpointwatch.ui.home.HomeViewModel
 import nz.personal.checkpointwatch.ui.theme.CheckpointWatchTheme
 
@@ -65,20 +68,24 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
 
+        val photoFiles = (application as App).container.imageStore::fileFor
+
         setContent {
-            CheckpointWatchTheme {
-                // One opaque surface under everything. Each screen already paints its own
-                // background, but a navigation cross-fade has both of them part-transparent for a
-                // few frames, and there is a WebView showing Facebook directly behind this view.
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background,
-                ) {
-                    AppNav(
-                        homeViewModel = homeViewModel,
-                        onRefresh = ::refresh,
-                        openHomeSignal = openHomeSignal,
-                    )
+            CompositionLocalProvider(LocalPhotoFiles provides photoFiles) {
+                CheckpointWatchTheme {
+                    // One opaque surface under everything. Each screen already paints its own
+                    // background, but a navigation cross-fade has both of them part-transparent for a
+                    // few frames, and there is a WebView showing Facebook directly behind this view.
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background,
+                    ) {
+                        AppNav(
+                            homeViewModel = homeViewModel,
+                            onRefresh = ::refresh,
+                            openHomeSignal = openHomeSignal,
+                        )
+                    }
                 }
             }
         }

@@ -16,6 +16,8 @@ import com.github.takahirom.roborazzi.RoborazziRule
 import com.github.takahirom.roborazzi.captureRoboImage
 import nz.personal.checkpointwatch.ui.home.HomeContent
 import nz.personal.checkpointwatch.ui.home.HomeUiState
+import nz.personal.checkpointwatch.ui.home.ListItem
+import nz.personal.checkpointwatch.ui.home.LocalPhotoFiles
 import nz.personal.checkpointwatch.ui.preview.NoCallbacks
 import nz.personal.checkpointwatch.ui.preview.NoSettingsCallbacks
 import nz.personal.checkpointwatch.ui.preview.SampleData
@@ -140,6 +142,67 @@ class ScreenshotTest {
         setHome(SampleData.multiReport, dark = false)
         composeTestRule.onAllNodesWithText("Pakuranga Road", substring = true)[0].performClick()
         capture("home_light_expanded.png")
+    }
+
+    // ---- Photos: a post's picture, as a strip on the closed card and whole on the opened one ----
+
+    /** A stand-in for a post's photo: wide, like the street views the page posts. */
+    private fun samplePhoto(): File {
+        val bitmap = android.graphics.Bitmap.createBitmap(918, 516, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        val paint = android.graphics.Paint()
+        canvas.drawColor(android.graphics.Color.rgb(96, 125, 139))
+        paint.color = android.graphics.Color.rgb(55, 71, 79)
+        canvas.drawRect(0f, 330f, 918f, 516f, paint)
+        paint.color = android.graphics.Color.rgb(255, 213, 79)
+        for (x in 40 until 918 step 160) canvas.drawRect(x.toFloat(), 410f, x + 90f, 424f, paint)
+        paint.color = android.graphics.Color.rgb(236, 239, 241)
+        canvas.drawCircle(760f, 110f, 60f, paint)
+        return File.createTempFile("photo", ".img").apply {
+            deleteOnExit()
+            outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        }
+    }
+
+    private fun setHomeWithPhoto(dark: Boolean) {
+        val photo = samplePhoto()
+        var first = true
+        val items = SampleData.multiReport.items.map { item ->
+            if (item is ListItem.Report && first) {
+                first = false
+                ListItem.Report(item.report.copy(imagePath = "photo.img"))
+            } else {
+                item
+            }
+        }
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalPhotoFiles provides { _: String -> photo }) {
+                CheckpointWatchTheme(darkTheme = dark) {
+                    HomeContent(state = SampleData.multiReport.copy(items = items), callbacks = NoCallbacks)
+                }
+            }
+        }
+    }
+
+    /** The decode is on another thread, which the compose rule does not know to wait for. */
+    private fun awaitPhoto() {
+        Thread.sleep(800)
+        composeTestRule.waitForIdle()
+    }
+
+    @Test
+    fun home_dark_photo() {
+        setHomeWithPhoto(dark = true)
+        awaitPhoto()
+        capture("home_dark_photo.png")
+    }
+
+    @Test
+    fun home_light_photo_expanded() {
+        setHomeWithPhoto(dark = false)
+        composeTestRule.onAllNodesWithText("Pakuranga Road", substring = true)[0].performClick()
+        awaitPhoto()
+        capture("home_light_photo_expanded.png")
     }
 
     /** The other half of that decision: a single-report post, where the card already said it all. */
