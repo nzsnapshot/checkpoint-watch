@@ -28,6 +28,14 @@ object Constants {
             "&tabs=timeline&width=500&height=5000&small_header=true" +
             "&hide_cover=true&show_facepile=false"
 
+    /**
+     * The home collector's published feed: a PC on an ordinary home connection scans the page and
+     * force-pushes what it finds to this repository's `data` branch. Read before anything else,
+     * because a phone on a VPN is shown one post and the PC is shown the feed.
+     */
+    const val RELAY_FEED_URL: String =
+        "https://raw.githubusercontent.com/nzsnapshot/checkpoint-watch/data/feed.json"
+
     const val DESKTOP_UA: String =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
