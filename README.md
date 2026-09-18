@@ -59,13 +59,21 @@ A few things follow from that:
 
 ## Privacy
 
-- **Facebook's servers, and nothing else.** The app loads
-  `https://www.facebook.com/CheckpointNZ` and nothing else. Loading that page
-  means the page itself also fetches from Facebook's own content hosts
-  (`*.fbcdn.net` and similar) — the same requests any browser opening that
-  page would make, to Facebook, not to anyone else. There is no analytics, no
-  crash reporting, and no other service of any kind: no request ever goes to a
-  server that isn't Facebook's.
+- **Two places, and nothing else.** Facebook, and one public file on GitHub.
+  - *GitHub first.* Each check starts with one plain HTTPS GET of
+    `https://raw.githubusercontent.com/nzsnapshot/checkpoint-watch/data/feed.json`
+    — the home collector's feed, below. The request carries no cookies and no
+    identifier; its only parameter is the current minute, to get past a cache.
+    GitHub sees an IP address asking for a public file, as it would from any
+    browser. If that feed is fresh, nothing is asked of Facebook's page at all.
+  - *Facebook otherwise.* When the feed is missing or old, the app loads
+    `https://www.facebook.com/CheckpointNZ`, and that page fetches from
+    Facebook's own content hosts (`*.fbcdn.net` and similar) — the same
+    requests any browser opening it would make.
+  - *Photos.* A post's photo is downloaded once, directly from `*.fbcdn.net`
+    over HTTPS, and kept under the app's own files; the list only ever shows
+    that copy. Any other address is refused before a connection is opened.
+  There is no analytics, no crash reporting, and no other service of any kind.
 - **The WebView is told not to phone home.** Android's WebView normally puts
   the app's package name in an `X-Requested-With` header on every request, and
   can send the URLs it loads to Google for a Safe Browsing check. Both are
@@ -287,7 +295,7 @@ Without it, the two tasks behave differently on purpose:
 To cut a release:
 
 ```
-./gradlew -PversionCode=2 -PversionName=1.1.0 :app:packageReleaseApk
+./gradlew -PversionCode=5 -PversionName=1.1.1 :app:packageReleaseApk
 gh release create v1.1.0 dist/checkpoint-watch-1.1.0.apk
 ```
 
