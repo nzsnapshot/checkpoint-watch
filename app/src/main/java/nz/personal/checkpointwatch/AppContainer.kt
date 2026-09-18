@@ -2,6 +2,7 @@ package nz.personal.checkpointwatch
 
 import android.content.Context
 import androidx.room.Room
+import java.io.File
 import nz.personal.checkpointwatch.collect.CollectResult
 import nz.personal.checkpointwatch.collect.FeedCollector
 import nz.personal.checkpointwatch.collect.HttpLatestFetcher
@@ -13,6 +14,9 @@ import nz.personal.checkpointwatch.data.ReportDao
 import nz.personal.checkpointwatch.data.RoomScrapeStore
 import nz.personal.checkpointwatch.data.ScrapeDao
 import nz.personal.checkpointwatch.data.ScrapeRecorder
+import nz.personal.checkpointwatch.images.HttpImageDownloader
+import nz.personal.checkpointwatch.images.ImageStore
+import nz.personal.checkpointwatch.images.RoomImageIndex
 import nz.personal.checkpointwatch.notify.Notifier
 import nz.personal.checkpointwatch.scan.AndroidNetworkInfoProvider
 import nz.personal.checkpointwatch.scan.FileScanDiagnosticsStore
@@ -58,6 +62,15 @@ class AppContainer(context: Context) {
     /** Where each scan leaves its account of itself, for Settings to copy out. */
     val scanDiagnostics: ScanDiagnosticsStore by lazy { FileScanDiagnosticsStore(appContext) }
 
+    /** The posts' photos, downloaded once and kept under the app's own files. */
+    val imageStore: ImageStore by lazy {
+        ImageStore(
+            dir = File(appContext.filesDir, "post_images"),
+            index = RoomImageIndex(database.postDao()),
+            downloader = HttpImageDownloader(),
+        )
+    }
+
     val scanCoordinator: ScanCoordinator by lazy {
         ScanCoordinator(
             collector = feedCollector.asPostCollector(),
@@ -67,6 +80,7 @@ class AppContainer(context: Context) {
             diagnostics = scanDiagnostics,
             network = AndroidNetworkInfoProvider(appContext),
             relay = RelayFeedFetcher(),
+            photos = { imageStore.sync() },
         )
     }
 }

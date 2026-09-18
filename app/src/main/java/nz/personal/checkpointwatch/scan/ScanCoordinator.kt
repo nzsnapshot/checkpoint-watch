@@ -65,6 +65,11 @@ interface PostCollector {
     fun snapshot(): CollectResult
 }
 
+/** Downloading the photos of posts that have one; `ImageStore` is the real one. */
+fun interface PhotoSync {
+    suspend fun sync()
+}
+
 /** The plain HTTPS GET fallback; `HttpLatestFetcher` is the real one. */
 fun interface LatestFetcher {
     suspend fun fetchChunks(): List<String>
@@ -104,6 +109,11 @@ class ScanCoordinator(
      * the app as it was before the relay existed.
      */
     private val relay: RelaySource = RelaySource { RelayResult.Unreachable },
+    /**
+     * Run after every scan that was recorded, once the scan itself is over: the posts are saved
+     * and on screen by then, so the photos arrive behind them rather than holding them up.
+     */
+    private val photos: PhotoSync = PhotoSync { },
     private val clock: () -> Instant = Instant::now,
     /**
      * Where the parsing and the database work happen. Callers are on the main thread — the screen
@@ -131,7 +141,12 @@ class ScanCoordinator(
             val startedAt = clock()
             if (!force && finishedRecently(startedAt)) return null
             _state.value = ScanState.Scanning
-            return runScan(trigger, host, startedAt)
+            val outcome = runScan(trigger, host, startedAt)
+            // Still holding the lock, so two syncs never race for the same file — but no longer
+            // "scanning", because as far as the owner is concerned the scan is done.
+            _state.value = ScanState.Idle
+            syncPhotos()
+            return outcome
         } finally {
             _state.value = ScanState.Idle
             running.unlock()
@@ -273,6 +288,17 @@ class ScanCoordinator(
         } catch (_: Exception) {
             collector.snapshot().copy(end = EndReason.NETWORK_ERROR)
         }
+
+    /** Housekeeping. A photo that does not arrive today is still pending tomorrow. */
+    private suspend fun syncPhotos() {
+        try {
+            photos.sync()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            // ignore
+        }
+    }
 
     /** Never worth a failed scan: a missing sentence in a banner is a very small loss. */
     private fun isVpnActive(): Boolean = try {

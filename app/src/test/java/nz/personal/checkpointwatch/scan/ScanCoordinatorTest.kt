@@ -47,6 +47,7 @@ class ScanCoordinatorTest {
     private val fetcher = FakeFetcher()
     private val diagnostics = FakeDiagnosticsStore()
     private val relay = FakeRelay()
+    private val photos = FakePhotoSync()
 
     /**
      * Stands in for `Dispatchers.Default` in production: a distinct dispatcher, so "the work ran
@@ -74,6 +75,7 @@ class ScanCoordinatorTest {
         diagnostics = diagnostics,
         network = { vpnActive },
         relay = relay,
+        photos = photos,
         clock = { now },
         computeDispatcher = compute,
     )
@@ -504,6 +506,55 @@ class ScanCoordinatorTest {
         assertTrue(diagnostics.written.first().second.contains("postsExtracted=1"))
     }
 
+    // --- photos ----------------------------------------------------------------------------
+    //
+    // Downloading is housekeeping after the scan, not part of it: the posts are already saved and
+    // on screen, so the banner has stopped saying "scanning" before the first photo is asked for.
+
+    @Test
+    fun `photos are fetched once the scan is recorded and no longer called a scan`() = runTest {
+        collector.result = webViewResult()
+        val coordinator = coordinator()
+        photos.onSync = {
+            photos.scrapesAtSync = store.scrapes.size
+            photos.stateAtSync = coordinator.state.value
+        }
+
+        coordinator.scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        assertEquals(1, photos.calls)
+        assertEquals(1, photos.scrapesAtSync)
+        assertSame(ScanState.Idle, photos.stateAtSync)
+    }
+
+    @Test
+    fun `a scan the relay answered fetches its photos too`() = runTest {
+        relay.result = relayFeed(ageMinutes = 3, relayPost("501"))
+
+        coordinator().scan(ScanTrigger.BACKGROUND, FakeHost, force = true)
+
+        assertEquals(1, photos.calls)
+    }
+
+    @Test
+    fun `a photo sync that throws costs the scan nothing`() = runTest {
+        collector.result = webViewResult()
+        photos.onSync = { throw IllegalStateException("disk full") }
+
+        val outcome = coordinator().scan(ScanTrigger.FOREGROUND, FakeHost, force = true)
+
+        assertEquals(ScrapeStatus.OK, outcome?.status)
+    }
+
+    @Test
+    fun `a scan that was skipped fetches nothing`() = runTest {
+        lastFinishedAt = now.minusSeconds(10).toEpochMilli()
+
+        assertNull(coordinator().scan(ScanTrigger.FOREGROUND, FakeHost, force = false))
+
+        assertEquals(0, photos.calls)
+    }
+
     // --- cancellation ----------------------------------------------------------------------
 
     @Test
@@ -630,6 +681,18 @@ class ScanCoordinatorTest {
         override suspend fun fetchChunks(): List<String> {
             calls++
             return chunks
+        }
+    }
+
+    private class FakePhotoSync : PhotoSync {
+        var calls = 0
+        var onSync: () -> Unit = {}
+        var scrapesAtSync: Int? = null
+        var stateAtSync: ScanState? = null
+
+        override suspend fun sync() {
+            calls++
+            onSync()
         }
     }
 
