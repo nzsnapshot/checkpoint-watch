@@ -1,0 +1,18 @@
+{
+  "name": "checkpoint-watch-collector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reads the public Checkpoint Watch Auckland Facebook page from a home connection and publishes a compact feed.json to the repo's data branch.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "once": "node src/index.js --once",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "playwright": "^1.47.0"
+  }
+}

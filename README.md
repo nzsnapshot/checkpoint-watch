@@ -173,6 +173,43 @@ Both are optional and off by default.
   never turn this on, and Android will only ask for notification permission
   the moment you do.
 
+## The home collector
+
+Facebook serves the logged-out page properly only from a residential
+connection. From a VPN or a data centre it "starves" the visitor: one post,
+no pagination. So there is a second reader, `collector/`, that runs on a PC
+at home and publishes what it sees to this repo's `data` branch as two files:
+
+- <https://raw.githubusercontent.com/nzsnapshot/checkpoint-watch/data/feed.json>
+  — the last three days of posts, merged across visits.
+- <https://raw.githubusercontent.com/nzsnapshot/checkpoint-watch/data/status.json>
+  — the last 20 scans and how each one ended, so a reader can tell "down"
+  from "alive but being limited".
+
+The branch is rewritten as a single commit every push, so it never grows.
+Unchanged feeds are pushed at most every 15 minutes as a heartbeat. Nothing
+about the machine (hostname, user, paths) is ever written into either file.
+
+To set it up on a Windows PC, with Node.js 20+ and git already authenticated
+to GitHub (`gh auth login` is enough):
+
+```
+cd collector
+npm install
+npx playwright install chromium
+npm test
+node src/index.js --once --dry-run        # one scan, written to state/out, nothing pushed
+node src/index.js --once                  # one scan, pushed to the data branch
+powershell -ExecutionPolicy Bypass -File install-task.ps1
+```
+
+The last step registers a Scheduled Task, `CheckpointWatchCollector`, that
+starts the service loop hidden at logon and restarts it if it ever exits.
+`install-task.ps1 -Remove` takes it away again. The loop scans every 5
+minutes (`CW_INTERVAL_MIN` changes that), backs off to half an hour after
+failures, and logs one line per cycle to `collector/state/collector.log`.
+Everything under `collector/state/` is local scratch and ignored by git.
+
 ## Building from source
 
 Requirements: JDK 17, and the Android SDK with platform 36 installed
