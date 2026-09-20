@@ -81,6 +81,11 @@ A few things follow from that:
   WebView's own metrics reporting. (On GrapheneOS, Vanadium doesn't do the
   Safe Browsing lookups anyway — this makes the behaviour the same whichever
   WebView the phone is using.)
+- **One advertisement, and it is inert.** The home screen and Settings show a
+  card for Stashwise, another app by the same developer. The icon and the words
+  ship inside the APK: showing the card fetches nothing, and tapping it reports
+  nothing. Its two links (`www.stashwise.org` and the App Store listing) are
+  handed to your browser only if you press them.
 - There is no account, no sign-in, and no data sent about you to anyone.
 - Everything the app collects stays in a local database on your phone. It is
   excluded from Android's cloud backup and from device-to-device transfer, so

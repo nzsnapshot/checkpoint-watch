@@ -86,6 +86,8 @@ data class SettingsCallbacks(
     val onNotificationSettings: () -> Unit,
     /** Puts the stored diagnostics for that kind of scan on the clipboard. */
     val onCopyDetails: (ScanTrigger) -> Unit,
+    /** Opens a web link. False when the phone has nothing that can. */
+    val onOpenLink: (String) -> Boolean,
 )
 
 /**
@@ -105,6 +107,7 @@ fun SettingsContent(
     // screen to show for itself, so the screen has to say so.
     val copied = remember { SnackbarHostState() }
     val copiedMessage = stringResource(R.string.settings_details_copied)
+    val openFailed = stringResource(R.string.card_open_failed)
     val scope = rememberCoroutineScope()
 
     Scaffold(
@@ -148,6 +151,14 @@ fun SettingsContent(
                     scope.launch {
                         copied.currentSnackbarData?.dismiss()
                         copied.showSnackbar(copiedMessage)
+                    }
+                }
+                StashwiseSection { url ->
+                    if (!callbacks.onOpenLink(url)) {
+                        scope.launch {
+                            copied.currentSnackbarData?.dismiss()
+                            copied.showSnackbar(openFailed)
+                        }
                     }
                 }
                 AboutSection(state)

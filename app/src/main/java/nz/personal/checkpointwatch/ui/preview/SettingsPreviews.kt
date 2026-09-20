@@ -17,6 +17,7 @@ internal val NoSettingsCallbacks = SettingsCallbacks(
     onBatterySettings = {},
     onNotificationSettings = {},
     onCopyDetails = {},
+    onOpenLink = { true },
 )
 
 @Composable

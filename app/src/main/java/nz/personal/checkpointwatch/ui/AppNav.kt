@@ -106,6 +106,7 @@ private fun HomeRoute(
             onClearFilters = viewModel::clearFilters,
             onOpenSettings = onOpenSettings,
             onOpenPost = { url -> context.openLink(url) },
+            onOpenLink = { url -> context.openLink(url) },
         )
     }
     HomeContent(state = state, callbacks = callbacks)
@@ -192,6 +193,7 @@ private fun SettingsRoute(onBack: () -> Unit) {
                 // missing between the state being built and the tap.
                 scope.launch { viewModel.details(trigger)?.let(context::copyToClipboard) }
             },
+            onOpenLink = { url -> context.openLink(url) },
         )
     }
 

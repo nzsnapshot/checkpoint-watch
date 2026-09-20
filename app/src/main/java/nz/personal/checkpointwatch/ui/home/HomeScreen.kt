@@ -24,12 +24,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberTopAppBarState
@@ -46,21 +46,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.model.ReportType
 import nz.personal.checkpointwatch.ui.CwIcons
-import kotlin.math.roundToInt
+import nz.personal.checkpointwatch.ui.promo.StashwiseCard
 
 /** Wide screens get a reading column rather than a 1200 px line of text. */
 private val MAX_CONTENT_WIDTH = 640.dp
@@ -74,15 +74,11 @@ private val GUTTER = 16.dp
 private val CARD_GAP = 8.dp
 private val SECTION_GAP = 16.dp
 
-/** Room the subtitle needs in the expanded bar, and how fast it gets out of the way. */
-private val SUBTITLE_HEADROOM = 24.dp
-private const val SUBTITLE_FADE_RATE = 2.5f
-
 /**
  * Everything the home screen can be asked to do. One immutable holder rather than eight separate
  * lambda parameters, so recomposition sees a single stable object.
  *
- * [onOpenPost] returns false when the phone has nothing that can open a web link, which is the one
+ * [onOpenPost] and [onOpenLink] return false when the phone has nothing that can open a web link, which is the one
  * failure the screen has to say something about.
  */
 @Immutable
@@ -94,6 +90,8 @@ data class HomeCallbacks(
     val onClearFilters: () -> Unit,
     val onOpenSettings: () -> Unit,
     val onOpenPost: (String) -> Boolean,
+    /** Any other web link, with the same answer when nothing can open it. */
+    val onOpenLink: (String) -> Boolean,
 )
 
 /**
@@ -109,7 +107,7 @@ fun HomeContent(
     modifier: Modifier = Modifier,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -136,9 +134,14 @@ fun HomeContent(
                 label = "top-bar-colour",
             )
             Column(modifier = Modifier.background(barColour)) {
-                LargeTopAppBar(
-                    title = { HomeTitle(collapsedFraction = scrollBehavior.state.collapsedFraction) },
-                    expandedHeight = TopAppBarDefaults.LargeAppBarExpandedHeight + SUBTITLE_HEADROOM,
+                // One row: the name and the settings cog side by side. A large bar keeps its
+                // actions in a row of their own and drops the title underneath it, which left the
+                // name hanging a whole row below the cog with nothing beside either.
+                TopAppBar(
+                    title = { HomeTitle() },
+                    // Two lines of text outgrow a fixed 64 dp once the owner turns the font up.
+                    expandedHeight = TopAppBarDefaults.TopAppBarExpandedHeight *
+                        LocalDensity.current.fontScale.coerceAtLeast(1f),
                     // The Column above paints the container, so the bar itself must not, or the two
                     // would cross-fade against each other as the list scrolls under them.
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -205,33 +208,31 @@ fun HomeContent(
                         scope.launch { snackbarHostState.showSnackbar(openFailed) }
                     }
                 },
+                onOpenLink = { url ->
+                    if (!callbacks.onOpenLink(url)) {
+                        scope.launch { snackbarHostState.showSnackbar(openFailed) }
+                    }
+                },
             )
         }
     }
 }
 
-/**
- * The app's name, with a quiet line under it saying what it is actually looking at. The subtitle
- * fades *and* gives its height back as the bar collapses, so the collapsed bar is a single
- * correctly-centred line rather than one line floating above an invisible second.
- */
+/** The app's name, with a quiet line under it saying what it is actually looking at. */
 @Composable
-private fun HomeTitle(collapsedFraction: Float) {
-    val visible = ((1f - collapsedFraction) * SUBTITLE_FADE_RATE).coerceIn(0f, 1f)
+private fun HomeTitle() {
     Column {
-        Text(stringResource(R.string.home_title))
+        Text(
+            text = stringResource(R.string.home_title),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         Text(
             text = stringResource(R.string.home_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
-            modifier = Modifier
-                .graphicsLayer { alpha = visible }
-                .layout { measurable, constraints ->
-                    val placeable = measurable.measure(constraints)
-                    val height = (placeable.height * visible).roundToInt()
-                    layout(placeable.width, height) { placeable.place(0, 0) }
-                },
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -244,6 +245,7 @@ private fun ReportList(
     listState: LazyListState,
     bottomInset: Dp,
     onOpenPost: (String) -> Unit,
+    onOpenLink: (String) -> Unit,
 ) {
     LazyColumn(
         state = listState,
@@ -251,6 +253,13 @@ private fun ReportList(
         contentPadding = PaddingValues(top = SECTION_GAP, bottom = bottomInset + 32.dp),
         verticalArrangement = Arrangement.spacedBy(CARD_GAP),
     ) {
+        item(key = "stashwise", contentType = "promo") {
+            // This + CARD_GAP = SECTION_GAP before the summary.
+            PageWidth(Modifier.animateItem().padding(bottom = SECTION_GAP - CARD_GAP)) {
+                StashwiseCard(onOpenLink = onOpenLink)
+            }
+        }
+
         item(key = "summary", contentType = "summary") {
             PageWidth(Modifier.animateItem()) {
                 SummaryHeader(

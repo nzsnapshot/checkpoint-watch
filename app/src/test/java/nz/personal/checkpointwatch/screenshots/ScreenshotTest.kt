@@ -1,6 +1,10 @@
 package nz.personal.checkpointwatch.screenshots
 
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -12,6 +16,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.RoborazziRule
 import com.github.takahirom.roborazzi.captureRoboImage
 import nz.personal.checkpointwatch.ui.home.HomeContent
@@ -21,6 +26,7 @@ import nz.personal.checkpointwatch.ui.home.LocalPhotoFiles
 import nz.personal.checkpointwatch.ui.preview.NoCallbacks
 import nz.personal.checkpointwatch.ui.preview.NoSettingsCallbacks
 import nz.personal.checkpointwatch.ui.preview.SampleData
+import nz.personal.checkpointwatch.ui.promo.StashwiseSheetContent
 import nz.personal.checkpointwatch.ui.settings.SettingsContent
 import nz.personal.checkpointwatch.ui.theme.CheckpointWatchTheme
 import org.junit.Rule
@@ -280,6 +286,30 @@ class ScreenshotTest {
     }
 
     // ---- Settings ----
+
+    // ---- Stashwise: the sheet's insides, which the card opens on either screen ----
+
+    private fun setStashwiseSheet(dark: Boolean) {
+        composeTestRule.setContent {
+            CheckpointWatchTheme(darkTheme = dark) {
+                Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                    StashwiseSheetContent(onOpenLink = {}, modifier = Modifier.padding(top = 24.dp))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun stashwise_sheet_dark() {
+        setStashwiseSheet(dark = true)
+        capture("stashwise_sheet_dark.png")
+    }
+
+    @Test
+    fun stashwise_sheet_light() {
+        setStashwiseSheet(dark = false)
+        capture("stashwise_sheet_light.png")
+    }
 
     @Test
     fun settings_dark() {

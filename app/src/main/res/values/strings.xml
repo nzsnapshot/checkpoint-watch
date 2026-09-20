@@ -153,6 +153,18 @@
     <string name="settings_details_copy_background">Copy last background scan</string>
     <string name="settings_details_copied">Copied — paste it into a message</string>
 
+    <!-- Stashwise: the developer's other app, advertised on home and in Settings -->
+    <string name="stashwise_name">Stashwise</string>
+    <string name="stashwise_platform">iPhone only</string>
+    <string name="stashwise_tagline">Track sales, stock, expenses and money owed. Private and offline.</string>
+    <string name="stashwise_card_action">What is it?</string>
+    <string name="stashwise_sheet_subtitle">Sales and inventory, kept on your phone</string>
+    <string name="stashwise_sheet_body">Stashwise is an app for anyone who sells things. It keeps track of your sales, your stock, your expenses and who still owes you money. It works with no signal and needs no account, and what you put in it stays on your phone.</string>
+    <string name="stashwise_sheet_origin">It comes from the same developer as Checkpoint Watch.</string>
+    <string name="stashwise_sheet_iphone_only">Right now Stashwise is only available on iPhone, from the App Store. An Android version is on the way, so on this phone the links below are for a look around or for passing on to someone with an iPhone.</string>
+    <string name="stashwise_app_store">Download on the App Store</string>
+    <string name="settings_stashwise_header">Also from the developer</string>
+
     <!-- Settings: about -->
     <string name="settings_about_header">About</string>
     <string name="settings_about_source_label">Data source</string>

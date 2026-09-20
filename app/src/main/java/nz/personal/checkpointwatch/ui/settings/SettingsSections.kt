@@ -29,6 +29,7 @@ import nz.personal.checkpointwatch.R
 import nz.personal.checkpointwatch.data.ScanTrigger
 import nz.personal.checkpointwatch.ui.CwIcons
 import nz.personal.checkpointwatch.ui.TimeFormat
+import nz.personal.checkpointwatch.ui.promo.StashwiseCard
 import nz.personal.checkpointwatch.ui.theme.isDarkScheme
 
 @Composable
@@ -154,6 +155,35 @@ internal fun StatusChip(label: String) {
             )
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )
+}
+
+/**
+ * The same card the home screen shows, under a heading that says whose it is. It draws its own
+ * edge, so it sits under the heading directly rather than inside a second card.
+ */
+@Composable
+internal fun StashwiseSection(onOpenLink: (String) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(start = 4.dp),
+        ) {
+            Icon(
+                imageVector = CwIcons.OpenInNew,
+                contentDescription = null,
+                tint = scheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = stringResource(R.string.settings_stashwise_header),
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+            )
+        }
+        StashwiseCard(onOpenLink = onOpenLink)
+    }
 }
 
 @Composable

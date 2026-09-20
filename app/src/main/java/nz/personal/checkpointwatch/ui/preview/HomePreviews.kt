@@ -16,6 +16,7 @@ internal val NoCallbacks = HomeCallbacks(
     onClearFilters = {},
     onOpenSettings = {},
     onOpenPost = { true },
+    onOpenLink = { true },
 )
 
 @Composable
