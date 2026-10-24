@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "page": "CheckpointNZ",
+  "updatedAt": 1792848837,
+  "scans": [
+    {
+      "at": 1792848837,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 5914,
+      "graphqlBodies": 8,
+      "rounds": 4
+    },
+    {
+      "at": 1792848507,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7423,
+      "graphqlBodies": 10,
+      "rounds": 5
+    },
+    {
+      "at": 1792848177,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 5912,
+      "graphqlBodies": 8,
+      "rounds": 4
+    },
+    {
+      "at": 1792847867,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7438,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792847554,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7397,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792847246,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7429,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792846958,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7206,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792846646,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7314,
+      "graphqlBodies": 10,
+      "rounds": 5
+    },
+    {
+      "at": 1792846343,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 8063,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792846045,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7466,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792845702,
+      "outcome": "FEED",
+      "endReason": "MAX_ROUNDS",
+      "posts": 59,
+      "ms": 37538,
+      "graphqlBodies": 61,
+      "rounds": 24
+    },
+    {
+      "at": 1792845400,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7226,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792845079,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7392,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792844800,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7213,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792844495,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7259,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792844166,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7990,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792843881,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 9083,
+      "graphqlBodies": 9,
+      "rounds": 6
+    },
+    {
+      "at": 1792843571,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7512,
+      "graphqlBodies": 9,
+      "rounds": 5
+    },
+    {
+      "at": 1792843226,
+      "outcome": "FEED",
+      "endReason": "MAX_ROUNDS",
+      "posts": 59,
+      "ms": 37868,
+      "graphqlBodies": 57,
+      "rounds": 24
+    },
+    {
+      "at": 1792842899,
+      "outcome": "FEED",
+      "endReason": "WALL",
+      "posts": 59,
+      "ms": 7489,
+      "graphqlBodies": 9,
+      "rounds": 5
+    }
+  ]
+}
